@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "IG Lead Tracker",
+  "version": "1.0.0",
+  "description": "FanBasis Instagram lead tracker",
+  "permissions": ["storage", "alarms", "notifications", "sidePanel"],
+  "host_permissions": [
+    "https://www.instagram.com/*",
+    "https://i.instagram.com/*",
+    "http://localhost:3000/*",
+    "https://*.vercel.app/*"
+  ],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "content_scripts": [
+    {
+      "matches": ["https://www.instagram.com/*"],
+      "js": ["instagram.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": { "default_path": "sidepanel.html" },
+  "action": { "default_title": "IG Lead Tracker", "default_icon": { "48": "icon48.png", "128": "icon128.png" } },
+  "icons": { "48": "icon48.png", "128": "icon128.png" },
+  "web_accessible_resources": [
+    {
+      "resources": ["page-interceptor.js"],
+      "matches": ["https://www.instagram.com/*"]
+    }
+  ]
+}

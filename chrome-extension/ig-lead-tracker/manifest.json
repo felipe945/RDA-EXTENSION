@@ -1,0 +1,58 @@
+{
+  "manifest_version": 3,
+  "name": "FanBasis IG Lead Tracker",
+  "version": "1.0.0",
+  "description": "Auto-tracks Instagram likes/follows and drives your Fanbasis outreach pipeline",
+
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications",
+    "sidePanel"
+  ],
+
+  "host_permissions": [
+    "https://www.instagram.com/*",
+    "https://i.instagram.com/*",
+    "https://*.manychat.com/*",
+    "https://*.agorapulse.com/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://www.instagram.com/*"],
+      "js": ["instagram.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.manychat.com/*"],
+      "js": ["scripts-data.js", "content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.agorapulse.com/*"],
+      "js": ["agora.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": ["page-interceptor.js", "dashboard.html"],
+      "matches": ["https://www.instagram.com/*", "<all_urls>"]
+    }
+  ],
+
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+
+  "action": {
+    "default_title": "FanBasis IG Tracker",
+    "default_popup": "popup.html"
+  }
+}
