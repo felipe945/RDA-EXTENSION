@@ -1,5 +1,6 @@
 @import "tailwindcss";
 
+/* ── Urgency tokens (existing — keep) ── */
 :root {
   --overdue: #d4892a;
   --due-today: #b8a245;
@@ -8,11 +9,141 @@
   --archived: #4a5244;
 }
 
-* {
+/* ── Core surface tokens ── */
+:root {
+  --ground: #070B12;
+  --surface-1: #0F1420;
+  --surface-2: #151B2E;
+  --surface-3: #1E2640;
+  --surface-4: #252E48;
+  --border: #1A2235;
+  --border-bright: #2A3554;
+
+  /* Brand */
+  --pink: #FF3A69;
+  --blue: #3B82F6;
+  --teal: #14B8A6;
+  --green: #22C55E;
+  --amber: #F59E0B;
+  --purple: #A78BFA;
+  --red: #EF4444;
+
+  /* Semantic status */
+  --success: #22C55E;
+  --warning: #F59E0B;
+  --danger: #FF3A69;
+  --info: #3B82F6;
+
+  /* Text scale */
+  --t1: #E2E8F0;
+  --t2: #94A3B8;
+  --t3: #475569;
+  --t4: #2D3A52;
+
+  /* Shadows */
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.25);
+  --shadow-hover: 0 4px 20px rgba(59,130,246,0.12), 0 8px 32px rgba(0,0,0,0.5);
+  --shadow-glow-pink: 0 0 20px rgba(255,58,105,0.25);
+  --shadow-glow-blue: 0 0 20px rgba(59,130,246,0.2);
+
+  /* Transitions */
+  --transition-fast: all 0.15s cubic-bezier(0.4,0,0.2,1);
+  --transition-smooth: all 0.2s cubic-bezier(0.4,0,0.2,1);
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+}
+
+/* ── Base ── */
+*, *::before, *::after {
   box-sizing: border-box;
 }
 
 body {
-  background: #030712;
-  color: #f3f4f6;
+  background: var(--ground);
+  color: var(--t1);
+}
+
+/* ── Card elevation ── */
+.card-hover {
+  transition: transform 0.18s cubic-bezier(0.4,0,0.2,1),
+              box-shadow 0.18s cubic-bezier(0.4,0,0.2,1);
+}
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-hover);
+}
+
+/* ── Glass surface ── */
+.glass {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* ── Glow effects ── */
+.glow-pink {
+  box-shadow: var(--shadow-glow-pink);
+}
+.glow-blue {
+  box-shadow: var(--shadow-glow-blue);
+}
+
+/* ── Shimmer loading animation ── */
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    #0F1420 0%,
+    #1E2640 40%,
+    #2A3554 50%,
+    #1E2640 60%,
+    #0F1420 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+}
+
+/* ── Pulse dot ── */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.65); }
+}
+.animate-pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+/* ── Focus ring ── */
+*:focus-visible {
+  outline: 2px solid rgba(59,130,246,0.65);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Custom scrollbar ── */
+::-webkit-scrollbar        { width: 5px; height: 5px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: rgba(148,163,184,0.18); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.32); }
+
+/* ── Slide-in animation for new leads ── */
+@keyframes slide-in-top {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-slide-in {
+  animation: slide-in-top 0.22s cubic-bezier(0.4,0,0.2,1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-hover:hover { transform: none; }
+  .animate-shimmer  { animation: none; }
+  .animate-slide-in { animation: none; }
+  .animate-pulse-dot { animation: none; }
 }

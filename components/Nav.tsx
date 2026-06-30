@@ -3,78 +3,127 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useMode } from "@/components/ModeProvider";
 import { useSession, signIn, signOut } from "next-auth/react";
+import { useEffect, useState } from "react";
+import { LayoutGrid, Send, MessageSquare, BookOpen, Sun } from "lucide-react";
 
 const NAV_LINKS = [
-  { href: "/", label: "Dashboard" },
-  { href: "/inbox", label: "Inbox" },
-  { href: "/scripts", label: "Scripts" },
-  { href: "/summary", label: "Briefing" },
+  { href: "/",         label: "Dashboard", icon: LayoutGrid },
+  { href: "/outreach", label: "Outreach",  icon: Send },
+  { href: "/inbox",    label: "Inbox",     icon: MessageSquare },
+  { href: "/scripts",  label: "Scripts",   icon: BookOpen },
+  { href: "/summary",  label: "Briefing",  icon: Sun },
 ];
+
+type NotifCounts = { overdue: number; replied: number; unread: number };
 
 export default function Nav() {
   const pathname = usePathname();
   const { mode, setMode } = useMode();
   const { data: session } = useSession();
+  const [counts, setCounts] = useState<NotifCounts>({ overdue: 0, replied: 0, unread: 0 });
+
+  useEffect(() => {
+    async function loadCounts() {
+      try {
+        const res = await fetch(`/api/notifications?mode=${mode}`);
+        if (!res.ok) return;
+        const { overdue = [], notifications = [] } = await res.json() as {
+          overdue?: unknown[];
+          notifications?: unknown[];
+        };
+        const notifs = notifications as { type?: string }[];
+        const unread = notifs.filter(n => n.type?.endsWith("_reply") || n.type === "replied").length;
+        const replied = notifs.filter(n => n.type === "replied" || n.type === "ig_reply").length;
+        setCounts({ overdue: (overdue as unknown[]).length, replied, unread });
+      } catch {}
+    }
+
+    loadCounts();
+    const interval = setInterval(loadCounts, 60_000);
+    return () => clearInterval(interval);
+  }, [mode]);
+
+  const urgentCount = counts.overdue + counts.replied;
 
   return (
-    <header className="sticky top-0 z-10 flex items-center justify-between px-6 py-3 border-b border-gray-800 bg-gray-950">
-      <div className="flex items-center gap-5">
-        <span className="font-semibold text-sm tracking-tight text-white">Unified Sales Ops</span>
-        <nav className="flex items-center gap-0.5">
-          {NAV_LINKS.map(({ href, label }) => (
-            <Link
-              key={href}
-              href={href}
-              className={`px-3 py-1.5 rounded-md text-sm transition-colors ${
-                pathname === href || (href !== "/" && pathname.startsWith(href))
-                  ? "bg-gray-800 text-white"
-                  : "text-gray-400 hover:text-gray-200 hover:bg-gray-900"
-              }`}
-            >
-              {label}
-            </Link>
-          ))}
-        </nav>
+    <aside className="w-56 shrink-0 flex flex-col min-h-screen sticky top-0 h-screen overflow-y-auto"
+      style={{ background: '#0A0E1A', borderRight: '1px solid #1A2235' }}>
+
+      {/* Logo / Brand */}
+      <div className="flex items-center gap-2.5 px-4 py-4 border-b" style={{ borderColor: '#1A2235' }}>
+        <div className="w-6 h-6 rounded-md flex-shrink-0" style={{ background: '#FF3A69' }} />
+        <span className="font-semibold text-sm tracking-tight" style={{ color: '#E2E8F0' }}>Sales Ops</span>
       </div>
 
-      <div className="flex items-center gap-3">
-        {session?.access_token ? (
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-green-400">✉ Gmail</span>
-            <button
-              onClick={() => signOut()}
-              className="text-xs text-gray-600 hover:text-gray-400"
-            >
-              sign out
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={() => signIn("google")}
-            className="text-xs px-2.5 py-1 border border-gray-700 rounded-md text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
-          >
-            Connect Gmail
-          </button>
-        )}
-        <div className="flex items-center gap-1 bg-gray-900 rounded-lg p-1">
-          <button
-            onClick={() => setMode("sales")}
-            className={`px-4 py-1 rounded-md text-xs font-medium transition-colors ${
-              mode === "sales" ? "bg-blue-600 text-white" : "text-gray-400 hover:text-gray-200"
-            }`}
-          >
+      {/* Mode toggle */}
+      <div className="px-3 pt-3">
+        <div className="flex rounded-lg p-1" style={{ background: '#0F1420' }}>
+          <button onClick={() => setMode("sales")}
+            className="flex-1 py-1 rounded-md text-xs font-semibold transition-colors"
+            style={mode === "sales"
+              ? { background: '#3B82F6', color: 'white' }
+              : { color: '#475569' }}>
             Sales
           </button>
-          <button
-            onClick={() => setMode("csm")}
-            className={`px-4 py-1 rounded-md text-xs font-medium transition-colors ${
-              mode === "csm" ? "bg-purple-600 text-white" : "text-gray-400 hover:text-gray-200"
-            }`}
-          >
+          <button onClick={() => setMode("csm")}
+            className="flex-1 py-1 rounded-md text-xs font-semibold transition-colors"
+            style={mode === "csm"
+              ? { background: '#A78BFA', color: 'white' }
+              : { color: '#475569' }}>
             CSM
           </button>
         </div>
       </div>
-    </header>
+
+      {/* Nav links */}
+      <nav className="flex-1 px-3 pt-3 space-y-0.5">
+        {NAV_LINKS.map(({ href, label, icon: Icon }) => {
+          const isActive = pathname === href || (href !== "/" && pathname.startsWith(href));
+          const badge =
+            href === "/" && urgentCount > 0 ? urgentCount :
+            href === "/inbox" && counts.unread > 0 ? counts.unread : null;
+          return (
+            <Link key={href} href={href}
+              className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors relative"
+              style={isActive
+                ? { background: 'rgba(59,130,246,0.12)', color: '#60A5FA' }
+                : { color: '#475569' }}
+              onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.color = '#94A3B8'; }}
+              onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.color = '#475569'; }}>
+              <Icon size={16} strokeWidth={1.75} />
+              {label}
+              {badge !== null && (
+                <span className="ml-auto min-w-[18px] h-[18px] px-1 text-[10px] font-bold text-white rounded-full flex items-center justify-center"
+                  style={{ background: href === "/inbox" ? '#A78BFA' : '#FF3A69' }}>
+                  {badge > 99 ? "99+" : badge}
+                </span>
+              )}
+            </Link>
+          );
+        })}
+      </nav>
+
+      {/* Gmail status + sign out at bottom */}
+      <div className="px-3 py-3 border-t space-y-2" style={{ borderColor: '#1A2235' }}>
+        {session?.access_token ? (
+          <div className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ background: '#0F1420' }}>
+            <span className="text-xs font-medium" style={{ color: '#22C55E' }}>Gmail ✓</span>
+            <button onClick={() => signOut()} className="text-xs transition-colors" style={{ color: '#2D3A52' }}
+              onMouseEnter={e => { (e.target as HTMLElement).style.color = '#94A3B8'; }}
+              onMouseLeave={e => { (e.target as HTMLElement).style.color = '#2D3A52'; }}>
+              sign out
+            </button>
+          </div>
+        ) : (
+          <button onClick={() => signIn("google")}
+            className="w-full text-xs px-3 py-2 rounded-lg border transition-colors text-left"
+            style={{ borderColor: '#1A2235', color: '#475569' }}
+            onMouseEnter={e => { (e.currentTarget).style.borderColor = '#2A3554'; (e.currentTarget).style.color = '#94A3B8'; }}
+            onMouseLeave={e => { (e.currentTarget).style.borderColor = '#1A2235'; (e.currentTarget).style.color = '#475569'; }}>
+            Connect Gmail →
+          </button>
+        )}
+      </div>
+    </aside>
   );
 }

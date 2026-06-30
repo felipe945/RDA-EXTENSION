@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { supabase as getSupabase } from "@/lib/supabase";
 import type { Lead } from "@/hooks/useLeads";
+import { stageColor } from "@/lib/stage-colors";
 
 type UrgencyBucket = "overdue" | "today" | "upcoming" | "booked" | "archived";
 
@@ -15,7 +15,7 @@ const BORDER_COLORS: Record<UrgencyBucket, string> = {
   archived: "border-l-[#4a5244]",
 };
 
-const SALES_STAGES = ["New", "Warming", "DM Sent", "Qualifying", "Call Offered", "Booked", "Closed", "DQ"];
+const SALES_STAGES = ["New", "Warming", "DM Sent", "Replied", "Qualifying", "Call Offered", "Booked", "Closed", "DQ"];
 const CSM_STAGES = ["Active", "At Risk", "Churned"];
 
 function relativeTime(iso: string): string {
@@ -37,51 +37,131 @@ function dueLabel(iso: string): string {
   return `due in ${Math.floor(h / 24)}d`;
 }
 
+const SF_BADGE: Record<string, { label: string; bg: string; text: string }> = {
+  customer:  { label: "Customer",  bg: "#14532d22", text: "#4ade80" },
+  inactive:  { label: "Inactive",  bg: "#78350f22", text: "#fbbf24" },
+  prospect:  { label: "Prospect",  bg: "#1e3a5f22", text: "#60a5fa" },
+};
+
+function SfBadge({ status, score }: { status: string; score: number }) {
+  const cfg = SF_BADGE[status];
+  if (!cfg) return null;
+  return (
+    <span
+      className="text-xs px-1.5 py-0 rounded border shrink-0"
+      style={{ background: cfg.bg, color: cfg.text, borderColor: `${cfg.text}44` }}
+      title={`SF match confidence: ${score}/100`}
+    >
+      {cfg.label} {score >= 55 ? "✓" : score >= 25 ? "~" : "?"}
+    </span>
+  );
+}
+
 export default function LeadCard({ lead, urgency }: { lead: Lead; urgency: UrgencyBucket }) {
   const [expanded, setExpanded] = useState(false);
   const [note, setNote] = useState("");
+  const [undoStage, setUndoStage] = useState<{ prev: string; timer: ReturnType<typeof setTimeout> } | null>(null);
   const isSales = SALES_STAGES.includes(lead.stage);
   const stages = isSales ? SALES_STAGES : CSM_STAGES;
 
+  useEffect(() => {
+    return () => { if (undoStage) clearTimeout(undoStage.timer); };
+  }, [undoStage]);
+
+  async function patchLead(fields: Record<string, unknown>) {
+    await fetch("/api/leads", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: lead.id, ...fields }),
+    });
+  }
+
   async function updateStage(stage: string) {
-    await getSupabase().from("leads").update({ stage, updated_at: new Date().toISOString() }).eq("id", lead.id);
+    if (undoStage) {
+      clearTimeout(undoStage.timer);
+      setUndoStage(null);
+    }
+    const prevStage = lead.stage;
+    await patchLead({ stage });
+    const timer = setTimeout(() => setUndoStage(null), 3000);
+    setUndoStage({ prev: prevStage, timer });
   }
 
   async function saveNote() {
     if (!note.trim()) return;
     const existing = lead.notes ?? "";
     const ts = new Date().toLocaleString();
-    await getSupabase()
-      .from("leads")
-      .update({ notes: `${existing}\n[${ts}] ${note}`.trim(), updated_at: new Date().toISOString() })
-      .eq("id", lead.id);
+    await patchLead({ notes: `${existing}\n[${ts}] ${note}`.trim() });
     setNote("");
   }
 
   async function archive() {
-    const stage = isSales ? "DQ" : "Churned";
-    await getSupabase().from("leads").update({ stage, updated_at: new Date().toISOString() }).eq("id", lead.id);
+    await patchLead({ stage: isSales ? "DQ" : "Churned" });
   }
 
   const lastEvent = lead.ig_events?.at(-1);
 
   return (
     <div
-      className={`bg-gray-900 border border-gray-800 border-l-4 ${BORDER_COLORS[urgency]} rounded-lg px-4 py-3 cursor-pointer`}
+      className={`card-hover border border-l-4 ${BORDER_COLORS[urgency]} rounded-xl px-4 py-3 cursor-pointer shadow-[var(--shadow-card)]`}
+      style={{ background: 'linear-gradient(135deg, #0F1420, #070B12)' }}
       onClick={() => setExpanded((e) => !e)}
     >
       <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#FF3A69] to-[#3B82F6] flex-shrink-0 flex items-center justify-center text-white text-[10px] font-bold">{(lead.ig_username ?? lead.name ?? '?')[0].toUpperCase()}</div>
           <span className="font-medium text-sm truncate">
-            {lead.ig_username ? `@${lead.ig_username}` : lead.name}
+            {lead.ig_username ? `@${lead.ig_username}` : (lead.name ?? "Unnamed")}
           </span>
+          {lead.follower_count != null && (
+            <span className="text-xs text-gray-500 shrink-0">
+              {lead.follower_count >= 1_000_000
+                ? `${(lead.follower_count / 1_000_000).toFixed(1)}M`
+                : lead.follower_count >= 1_000
+                ? `${Math.round(lead.follower_count / 1_000)}K`
+                : String(lead.follower_count)}
+            </span>
+          )}
+          {lead.sf_status !== "none" && lead.sf_match_reasons.length > 0 && (
+            <SfBadge status={lead.sf_status} score={lead.sf_confidence_score} />
+          )}
           {lead.source && (
-            <span className="text-xs bg-gray-800 px-2 py-0.5 rounded text-gray-400">
+            <span className="text-xs bg-gray-800 px-2 py-0.5 rounded text-gray-400 shrink-0">
               {lead.source}
             </span>
           )}
+          {lead.stage === "Replied" && (
+            <span className="text-xs font-bold text-white bg-[#8b5cf6] px-2 py-0.5 rounded-full animate-pulse-dot shrink-0">
+              REPLIED
+            </span>
+          )}
+          {lead.research_status === "complete" && lead.research_cache && (() => {
+            const score = typeof lead.research_cache.fitScore === "number" ? lead.research_cache.fitScore : null;
+            const stack = Array.isArray(lead.research_cache.stackDetected) ? lead.research_cache.stackDetected as string[] : [];
+            const color = score !== null ? (score >= 75 ? "#22c55e" : score >= 50 ? "#f59e0b" : "#ef4444") : null;
+            return (
+              <div className="flex items-center gap-1.5 hidden sm:flex">
+                {score !== null && (
+                  <span className="text-xs font-bold tabular-nums shrink-0 w-6 text-right" style={{ color: color! }}>{score}</span>
+                )}
+                {score !== null && (
+                  <div className="w-12 h-1 rounded-full bg-[#1E2640] overflow-hidden hidden sm:block">
+                    <div className="h-full rounded-full transition-all duration-500" style={{ width: `${score}%`, background: color! }} />
+                  </div>
+                )}
+                {stack.slice(0, 2).map(s => (
+                  <span key={s} className="text-xs bg-gray-800 px-1.5 py-0 rounded text-gray-500 hidden md:inline">
+                    {s}
+                  </span>
+                ))}
+              </div>
+            );
+          })()}
+          {lead.research_status === "pending" && (
+            <span className="w-1.5 h-1.5 rounded-full bg-[#FF3A69] animate-pulse shrink-0 hidden sm:inline-block" />
+          )}
           {lastEvent && (
-            <span className="text-xs text-gray-500 hidden sm:inline">
+            <span className="text-xs text-gray-500 hidden lg:inline">
               {lastEvent.type} · {relativeTime(lastEvent.ts)}
             </span>
           )}
@@ -105,25 +185,84 @@ export default function LeadCard({ lead, urgency }: { lead: Lead; urgency: Urgen
 
       {expanded && (
         <div
-          className="mt-3 space-y-3"
+          className="mt-3 space-y-3 animate-slide-in"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Stage selector */}
           <div className="flex gap-1 flex-wrap">
-            {stages.map((s) => (
-              <button
-                key={s}
-                onClick={() => updateStage(s)}
-                className={`px-2 py-0.5 rounded text-xs border transition-colors ${
-                  lead.stage === s
-                    ? "border-blue-500 bg-blue-900/40 text-blue-300"
-                    : "border-gray-700 text-gray-400 hover:border-gray-500"
-                }`}
-              >
-                {s}
-              </button>
-            ))}
+            {stages.map((s) => {
+              const color = stageColor(s);
+              const isActive = lead.stage === s;
+              return (
+                <button
+                  key={s}
+                  onClick={() => updateStage(s)}
+                  className="px-2 py-0.5 rounded text-xs border transition-colors"
+                  style={isActive
+                    ? { borderColor: color, color, background: `${color}22` }
+                    : { borderColor: "#1E2640", color: "#475569" }
+                  }
+                >
+                  {s}
+                </button>
+              );
+            })}
           </div>
+
+          {/* Follow-up date setter */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-gray-500">Follow up:</span>
+            <div className="flex gap-1">
+              {[1, 3, 7, 14].map(days => (
+                <button
+                  key={days}
+                  onClick={async () => {
+                    const dueAt = new Date(Date.now() + days * 86400000).toISOString();
+                    await patchLead({ due_at: dueAt });
+                  }}
+                  className="text-xs px-2 py-0.5 border border-gray-700 rounded text-gray-500 hover:border-gray-500 hover:text-gray-300 transition-colors"
+                >
+                  +{days}d
+                </button>
+              ))}
+              <input
+                type="date"
+                onChange={async (e) => {
+                  if (!e.target.value) return;
+                  const dueAt = new Date(e.target.value).toISOString();
+                  await patchLead({ due_at: dueAt });
+                }}
+                className="text-xs bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-gray-500 outline-none cursor-pointer"
+                title="Pick a specific date"
+              />
+            </div>
+            {lead.due_at && (
+              <button
+                onClick={() => patchLead({ due_at: null })}
+                className="text-xs text-gray-700 hover:text-gray-500"
+                title="Clear due date"
+              >
+                clear
+              </button>
+            )}
+          </div>
+
+          {/* Stage change undo toast */}
+          {undoStage && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-gray-500">Moved to {lead.stage}</span>
+              <button
+                onClick={async () => {
+                  clearTimeout(undoStage.timer);
+                  setUndoStage(null);
+                  await patchLead({ stage: undoStage.prev });
+                }}
+                className="text-[#FF3A69] font-medium hover:underline"
+              >
+                Undo
+              </button>
+            </div>
+          )}
 
           {/* Notes */}
           {lead.notes && (
@@ -137,18 +276,18 @@ export default function LeadCard({ lead, urgency }: { lead: Lead; urgency: Urgen
               value={note}
               onChange={(e) => setNote(e.target.value)}
               placeholder="Add note..."
-              className="flex-1 text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200 outline-none focus:border-gray-500"
+              className="flex-1 text-xs border rounded px-2 py-1 text-gray-200 outline-none transition-colors" style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--t1)' }} onFocus={(e)=>{e.currentTarget.style.borderColor='var(--border-bright)'}} onBlur={(e)=>{e.currentTarget.style.borderColor='var(--border)'}}
               onKeyDown={(e) => e.key === "Enter" && saveNote()}
             />
             <button
               onClick={saveNote}
-              className="text-xs px-3 py-1 bg-gray-700 rounded hover:bg-gray-600 text-gray-200"
+              className="text-xs px-3 py-1 rounded text-gray-200 transition-colors" style={{ background: 'var(--surface-3)' }}
             >
               Save
             </button>
             <button
               onClick={archive}
-              className="text-xs px-3 py-1 border border-gray-700 rounded hover:border-red-800 text-gray-500 hover:text-red-400"
+              className="text-xs px-3 py-1 border rounded text-gray-500 hover:text-red-400 hover:border-red-900 transition-colors" style={{ borderColor: 'var(--border)' }}
             >
               Archive
             </button>

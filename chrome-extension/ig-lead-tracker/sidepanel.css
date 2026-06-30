@@ -1,0 +1,40 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #070B12; color: #E2E8F0; font-family: -apple-system,'Inter',system-ui,sans-serif; font-size: 13px; }
+#app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+#sp-header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: #0A0E1A; border-bottom: 1px solid #1A2235; flex-shrink: 0; }
+.sp-logo { width: 22px; height: 22px; border-radius: 6px; background: #FF3A69; flex-shrink: 0; }
+.sp-title { font-size: 13px; font-weight: 700; color: #E2E8F0; }
+.sp-urgent-badge { margin-left: auto; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 99px; background: rgba(255,58,105,0.18); color: #FF3A69; border: 1px solid rgba(255,58,105,0.3); }
+#sp-tabs { display: flex; border-bottom: 1px solid #1A2235; flex-shrink: 0; }
+.sp-tab { flex: 1; padding: 9px 6px; text-align: center; font-size: 12px; font-weight: 500; color: #475569; background: none; border: none; cursor: pointer; position: relative; transition: color 0.15s; }
+.sp-tab.active { color: #E2E8F0; }
+.sp-tab.active::after { content: ''; position: absolute; bottom: 0; left: 16px; right: 16px; height: 2px; background: #FF3A69; border-radius: 99px; }
+#sp-search-bar { padding: 10px 12px 6px; flex-shrink: 0; }
+#sp-search { width: 100%; padding: 7px 10px; background: #0F1420; border: 1px solid #1A2235; border-radius: 7px; color: #CBD5E1; font-size: 12px; outline: none; transition: border-color 0.15s; }
+#sp-search:focus { border-color: #2A3554; }
+#sp-content { flex: 1; overflow-y: auto; }
+#sp-footer { padding: 10px 12px; border-top: 1px solid #1A2235; flex-shrink: 0; background: #070B12; }
+.sp-save-btn { width: 100%; padding: 9px; background: #FF3A69; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+.sp-save-btn:hover { background: #E0305E; }
+.sp-section-label { padding: 8px 12px 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #2D3A52; }
+.sp-lead-item { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-bottom: 1px solid #0F1420; cursor: pointer; transition: background 0.12s; }
+.sp-lead-item:hover { background: rgba(59,130,246,0.04); }
+.sp-lead-avatar { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #3B82F6, #8B5CF6); flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: white; }
+.sp-lead-name { font-size: 13px; font-weight: 600; color: #E2E8F0; }
+.sp-lead-sub { font-size: 11px; color: #475569; }
+.sp-lead-due { margin-left: auto; font-size: 11px; color: #F59E0B; flex-shrink: 0; }
+.sp-lead-due.overdue { color: #FF3A69; }
+.sp-lead-due.replied { color: #A78BFA; font-weight: 700; }
+.sp-empty { padding: 40px 20px; text-align: center; color: #2D3A52; font-size: 13px; }
+.sp-shimmer { background: linear-gradient(90deg,#0F1420 0%,#1E2640 50%,#0F1420 100%); background-size: 200% 100%; animation: sp-shimmer 1.6s ease-in-out infinite; }
+@keyframes sp-shimmer { 0% {background-position:200% 0} 100% {background-position:-200% 0} }
+.sp-lead-skeleton { height: 46px; margin: 4px 12px; border-radius: 7px; }
+.sp-script-item { padding: 12px; margin: 8px 12px; background: #0F1420; border: 1px solid #1A2235; border-radius: 8px; }
+.sp-script-label { font-size: 10px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: #475569; margin-bottom: 6px; }
+.sp-script-text { font-size: 12px; color: #CBD5E1; line-height: 1.6; }
+.sp-script-copy { display: inline-block; margin-top: 8px; font-size: 11px; padding: 3px 10px; background: #1A2235; border: 1px solid #2A3554; border-radius: 5px; color: #94A3B8; cursor: pointer; transition: all 0.15s; }
+.sp-script-copy:hover { color: white; border-color: #3B82F6; }
+.sp-inbox-cta { margin: 24px 12px 0; padding: 16px; background: #0F1420; border: 1px solid #1A2235; border-radius: 10px; text-align: center; }
+.sp-inbox-cta p { font-size: 12px; color: #475569; margin-bottom: 12px; line-height: 1.5; }
+.sp-inbox-link { display: inline-block; padding: 8px 18px; background: #3B82F6; color: white; border-radius: 7px; font-size: 12px; font-weight: 600; text-decoration: none; transition: background 0.15s; }
+.sp-inbox-link:hover { background: #2563EB; }

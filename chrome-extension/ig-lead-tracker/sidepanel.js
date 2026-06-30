@@ -1,162 +1,376 @@
-const STAGES = ["New", "Warming", "DM Sent", "Qualifying", "Call Offered", "Booked", "Closed", "DQ"];
+(function() {
+  'use strict';
 
-const FU_PLAN = {
-  "ig-warm": [
-    { prefix: "IG · DM Opener", delayH: 48 },
-    { prefix: "IG · FU1 Story", delayH: 72 },
-    { prefix: "IG · FU2 Value", delayH: 120 },
-    { prefix: "IG · FU3 Breakup", delayH: 168 },
-  ],
-  "call-offered": [
-    { prefix: "Call-Offered · FU1", delayH: 24 },
-    { prefix: "Call-Offered · FU2", delayH: 48 },
-    { prefix: "Call-Offered · FU3", delayH: 72 },
-  ],
-};
+  // ─── State ───────────────────────────────────────────────────────────────
+  let allLeads = [];
+  let activeTab = 'leads';
+  let searchQuery = '';
+  let refreshTimer = null;
 
-let allLeads = [];
-let activeFilter = "all";
+  // ─── DOM refs ────────────────────────────────────────────────────────────
+  const content = document.getElementById('sp-content');
+  const searchInput = document.getElementById('sp-search');
+  const saveBtn = document.getElementById('sp-save-btn');
+  const urgentBadge = document.getElementById('sp-urgent-badge');
+  const tabs = document.querySelectorAll('.sp-tab');
+  const searchBar = document.getElementById('sp-search-bar');
 
-function urgencyBucket(lead) {
-  if (["Closed", "DQ"].includes(lead.stage)) return "archived";
-  if (lead.stage === "Booked") return "booked";
-  if (!lead.dueAt) return "upcoming";
-  const now = Date.now();
-  const eod = new Date(); eod.setHours(23, 59, 59, 999);
-  if (lead.dueAt < now) return "overdue";
-  if (lead.dueAt <= eod.getTime()) return "today";
-  return "upcoming";
-}
+  // ─── FanBasis opener scripts ──────────────────────────────────────────────
+  const SCRIPTS = [
+    {
+      label: 'Follower Milestone',
+      text: 'Hey [name] — noticed you just hit [X]K followers. Huge milestone. We help creators at that stage turn that audience into predictable revenue. Worth a quick chat?'
+    },
+    {
+      label: 'Content-to-Cash',
+      text: 'Love the content [name]. Quick question — are you currently monetizing your audience outside of brand deals? We have a model that works really well at your follower count.'
+    },
+    {
+      label: 'Platform Risk',
+      text: 'Hey [name], your content is amazing. Have you thought about what happens if IG changes the algorithm again? We help creators own their revenue so platform shifts don\'t hurt.'
+    },
+    {
+      label: 'Fan Engagement',
+      text: 'Your engagement rate is insane [name]. We work with creators who have your kind of connection with their audience — there\'s a real monetization play here. Open to hearing more?'
+    },
+    {
+      label: 'Direct Offer',
+      text: 'Hey [name] — we\'re FanBasis. We help creators build a direct-to-fan revenue stream. Takes 20 min to set up, no upfront cost. Interested in seeing what it could look like for you?'
+    },
+  ];
 
-function relTime(ts) {
-  const diff = Date.now() - ts;
-  const h = Math.floor(diff / 3600000);
-  return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
-}
-
-function dueLabel(ts) {
-  const diff = ts - Date.now();
-  if (diff < 0) {
-    const h = Math.floor(-diff / 3600000);
-    return h < 24 ? `${h}h overdue` : `${Math.floor(h / 24)}d overdue`;
-  }
-  const h = Math.floor(diff / 3600000);
-  return h < 24 ? `due in ${h}h` : `due in ${Math.floor(h / 24)}d`;
-}
-
-function renderLeads() {
-  const list = document.getElementById("leadList");
-  const visible = allLeads.filter((l) => {
-    if (activeFilter === "all") return !["Closed", "DQ"].includes(l.stage);
-    return urgencyBucket(l) === activeFilter;
-  });
-
-  if (!visible.length) {
-    list.innerHTML = `<p class="empty">No leads here yet.</p>`;
-    return;
+  // ─── Helpers ─────────────────────────────────────────────────────────────
+  function formatFollowers(n) {
+    if (!n) return '';
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+    if (n >= 1_000) return Math.round(n / 1_000) + 'K';
+    return String(n);
   }
 
-  list.innerHTML = visible.map((lead) => {
-    const b = urgencyBucket(lead);
-    const lastEv = lead.igEvents?.at(-1);
-    return `
-      <div class="lead-card urgency-${b}" data-id="${lead.id}">
-        <div class="lead-row">
-          <span class="lead-name">${lead.igUsername ? "@" + lead.igUsername : lead.name}</span>
-          <span class="lead-stage">${lead.stage}</span>
+  function getDashboardUrl() {
+    return new Promise(resolve => {
+      chrome.storage.sync.get({ dashboardUrl: 'http://localhost:3000' }, ({ dashboardUrl }) => {
+        resolve(dashboardUrl);
+      });
+    });
+  }
+
+  function urgencyLabel(lead) {
+    if (!lead.next_followup_at) return 'upcoming';
+    const due = new Date(lead.next_followup_at);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+    const diff = dueDay - today;
+    if (diff < 0) return 'overdue';
+    if (diff === 0) return 'today';
+    return 'upcoming';
+  }
+
+  function groupLeads(leads) {
+    const groups = { overdue: [], today: [], upcoming: [], booked: [], archived: [] };
+    leads.forEach(lead => {
+      if (lead.stage === 'Booked' || lead.stage === 'Won') {
+        groups.booked.push(lead);
+      } else if (lead.stage === 'Archived' || lead.stage === 'Lost') {
+        groups.archived.push(lead);
+      } else {
+        const urg = urgencyLabel(lead);
+        groups[urg].push(lead);
+      }
+    });
+    return groups;
+  }
+
+  function countUrgent(leads) {
+    return leads.filter(l => {
+      const u = urgencyLabel(l);
+      return u === 'overdue' || u === 'today';
+    }).length;
+  }
+
+  function dueLabel(lead) {
+    if (!lead.next_followup_at) return '';
+    const due = new Date(lead.next_followup_at);
+    const urg = urgencyLabel(lead);
+    if (urg === 'overdue') {
+      const days = Math.round((new Date() - due) / 86400000);
+      return days === 1 ? 'Yesterday' : `${days}d ago`;
+    }
+    if (urg === 'today') return 'Today';
+    const days = Math.round((due - new Date()) / 86400000);
+    return `in ${days}d`;
+  }
+
+  function avatarLetter(lead) {
+    const name = lead.name || lead.ig_username || '?';
+    return name[0].toUpperCase();
+  }
+
+  // ─── Skeleton loader ─────────────────────────────────────────────────────
+  function renderSkeleton() {
+    content.innerHTML = [1, 2, 3, 4, 5].map(() =>
+      `<div class="sp-lead-skeleton sp-shimmer"></div>`
+    ).join('');
+  }
+
+  // ─── Render leads tab ────────────────────────────────────────────────────
+  function renderLeads() {
+    const query = searchQuery.toLowerCase();
+    const filtered = query
+      ? allLeads.filter(l =>
+          (l.ig_username || '').toLowerCase().includes(query) ||
+          (l.name || '').toLowerCase().includes(query)
+        )
+      : allLeads;
+
+    if (filtered.length === 0) {
+      content.innerHTML = `<div class="sp-empty">No leads yet.<br>Browse Instagram to start saving.</div>`;
+      return;
+    }
+
+    const groups = groupLeads(filtered);
+    const ORDER = ['overdue', 'today', 'upcoming', 'booked', 'archived'];
+    const LABELS = {
+      overdue: 'Overdue',
+      today: 'Follow up today',
+      upcoming: 'Upcoming',
+      booked: 'Booked / Won',
+      archived: 'Archived'
+    };
+
+    let html = '';
+    ORDER.forEach(key => {
+      const group = groups[key];
+      if (group.length === 0) return;
+      html += `<div class="sp-section-label">${LABELS[key]}</div>`;
+      group.forEach(lead => {
+        const urg = urgencyLabel(lead);
+        const due = dueLabel(lead);
+        const dueCls = urg === 'overdue' ? 'overdue' : (lead.stage === 'Replied' ? 'replied' : '');
+        const dueText = lead.stage === 'Replied' ? 'Replied' : due;
+        html += `
+          <div class="sp-lead-item" data-id="${lead.id}">
+            <div class="sp-lead-avatar">${avatarLetter(lead)}</div>
+            <div style="flex:1;min-width:0">
+              <div class="sp-lead-name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                ${lead.name || '@' + lead.ig_username}
+              </div>
+              <div class="sp-lead-sub">
+                @${lead.ig_username || ''}
+                ${lead.follower_count ? ' &middot; ' + formatFollowers(lead.follower_count) : ''}
+                ${lead.stage ? ' &middot; ' + lead.stage : ''}
+              </div>
+            </div>
+            ${dueText ? `<div class="sp-lead-due ${dueCls}">${dueText}</div>` : ''}
+          </div>
+        `;
+      });
+    });
+
+    content.innerHTML = html;
+
+    // Bind click handlers
+    content.querySelectorAll('.sp-lead-item').forEach(item => {
+      item.addEventListener('click', async () => {
+        const id = item.dataset.id;
+        const dashboardUrl = await getDashboardUrl();
+        window.open(`${dashboardUrl}/leads/${id}`, '_blank');
+      });
+    });
+  }
+
+  // ─── Render scripts tab ──────────────────────────────────────────────────
+  function renderScripts() {
+    let html = `<div class="sp-section-label">FanBasis Openers</div>`;
+    SCRIPTS.forEach((script, i) => {
+      html += `
+        <div class="sp-script-item">
+          <div class="sp-script-label">${script.label}</div>
+          <div class="sp-script-text">${script.text}</div>
+          <button class="sp-script-copy" data-idx="${i}">Copy</button>
         </div>
-        <div class="lead-meta">
-          ${lastEv ? `<span>${lastEv.type} · ${relTime(lastEv.ts)}</span>` : ""}
-          ${lead.dueAt ? `<span class="${b === "overdue" ? "overdue-text" : ""}">${dueLabel(lead.dueAt)}</span>` : ""}
-        </div>
-        <div class="stage-pills">
-          ${STAGES.map((s) => `<button class="pill ${lead.stage === s ? "active" : ""}" data-id="${lead.id}" data-stage="${s}">${s}</button>`).join("")}
-        </div>
+      `;
+    });
+    content.innerHTML = html;
+
+    content.querySelectorAll('.sp-script-copy').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.idx, 10);
+        navigator.clipboard.writeText(SCRIPTS[idx].text);
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1800);
+      });
+    });
+  }
+
+  // ─── Render inbox tab ────────────────────────────────────────────────────
+  async function renderInbox() {
+    const dashboardUrl = await getDashboardUrl();
+    content.innerHTML = `
+      <div class="sp-inbox-cta">
+        <p>Manage all your DM threads, follow-up reminders, and reply tracking in the full inbox.</p>
+        <a class="sp-inbox-link" href="${dashboardUrl}/inbox" target="_blank">Open full inbox &rarr;</a>
+      </div>
+      <div style="margin-top:16px">
+        <div class="sp-section-label">Leads awaiting reply</div>
+        ${allLeads.filter(l => l.stage === 'Contacted' || l.stage === 'Waiting').length === 0
+          ? '<div class="sp-empty" style="padding:20px">No threads waiting on reply.</div>'
+          : allLeads
+              .filter(l => l.stage === 'Contacted' || l.stage === 'Waiting')
+              .slice(0, 8)
+              .map(lead => `
+                <div class="sp-lead-item" data-id="${lead.id}">
+                  <div class="sp-lead-avatar">${avatarLetter(lead)}</div>
+                  <div style="flex:1;min-width:0">
+                    <div class="sp-lead-name">@${lead.ig_username || ''}</div>
+                    <div class="sp-lead-sub">${lead.stage}</div>
+                  </div>
+                </div>
+              `).join('')
+        }
       </div>
     `;
-  }).join("");
 
-  list.querySelectorAll(".pill").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const { id, stage } = btn.dataset;
-      await chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id, updates: { stage } });
-      loadLeads();
+    content.querySelectorAll('.sp-lead-item[data-id]').forEach(item => {
+      item.addEventListener('click', async () => {
+        const id = item.dataset.id;
+        const url = await getDashboardUrl();
+        window.open(`${url}/leads/${id}`, '_blank');
+      });
+    });
+  }
+
+  // ─── Render dispatcher ──────────────────────────────────────────────────
+  function renderContent() {
+    if (activeTab === 'leads') {
+      renderLeads();
+    } else if (activeTab === 'scripts') {
+      renderScripts();
+    } else if (activeTab === 'inbox') {
+      renderInbox();
+    }
+  }
+
+  // ─── Search bar visibility ───────────────────────────────────────────────
+  function updateSearchVisibility() {
+    searchBar.style.display = activeTab === 'leads' ? 'block' : 'none';
+  }
+
+  // ─── Fetch leads ─────────────────────────────────────────────────────────
+  function fetchLeads(showSkeleton = false) {
+    if (showSkeleton && activeTab === 'leads') renderSkeleton();
+
+    chrome.runtime.sendMessage({ type: 'FETCH_LEADS' }, (resp) => {
+      if (resp?.ok && resp.data?.leads) {
+        allLeads = resp.data.leads;
+      } else if (resp?.ok && Array.isArray(resp.data)) {
+        allLeads = resp.data;
+      } else {
+        allLeads = [];
+      }
+
+      // Update urgent badge
+      const urgentCount = countUrgent(allLeads);
+      if (urgentCount > 0) {
+        urgentBadge.textContent = urgentCount;
+        urgentBadge.style.display = 'inline-block';
+      } else {
+        urgentBadge.style.display = 'none';
+      }
+
+      renderContent();
+    });
+  }
+
+  // ─── Save current IG profile ─────────────────────────────────────────────
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.url?.includes('instagram.com')) {
+        saveBtn.textContent = 'Not on Instagram';
+        setTimeout(() => {
+          saveBtn.disabled = false;
+          saveBtn.textContent = '＋ Save current profile';
+        }, 2000);
+        return;
+      }
+
+      // Extract username from tab URL
+      const m = tab.url.match(/instagram\.com\/([^/?#]+)/);
+      const username = m ? m[1] : null;
+      const SKIP = ['explore','reel','p','stories','direct','accounts','_','reels'];
+
+      if (!username || SKIP.includes(username)) {
+        saveBtn.textContent = 'Not a profile page';
+        setTimeout(() => {
+          saveBtn.disabled = false;
+          saveBtn.textContent = '＋ Save current profile';
+        }, 2000);
+        return;
+      }
+
+      chrome.runtime.sendMessage({
+        type: 'SAVE_LEAD',
+        payload: {
+          type: 'IG_PROFILE_SAVE',
+          ig_username: username,
+          profile_url: tab.url,
+          source: 'IG',
+        }
+      }, (resp) => {
+        if (resp?.ok) {
+          saveBtn.textContent = 'Saved!';
+          fetchLeads();
+        } else if (resp?.queued) {
+          saveBtn.textContent = 'Queued (offline)';
+        } else {
+          saveBtn.textContent = 'Failed — retry';
+        }
+        setTimeout(() => {
+          saveBtn.disabled = false;
+          saveBtn.textContent = '＋ Save current profile';
+        }, 2200);
+      });
+    } catch (err) {
+      saveBtn.textContent = 'Error';
+      setTimeout(() => {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '＋ Save current profile';
+      }, 2000);
+    }
+  });
+
+  // ─── Tab switching ───────────────────────────────────────────────────────
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      activeTab = tab.dataset.tab;
+      searchQuery = '';
+      searchInput.value = '';
+      updateSearchVisibility();
+      renderContent();
     });
   });
-}
 
-async function loadLeads() {
-  const { leads } = await chrome.runtime.sendMessage({ type: "GET_LEADS" });
-  allLeads = leads.sort((a, b) => (a.dueAt ?? Infinity) - (b.dueAt ?? Infinity));
-  renderLeads();
-}
-
-// Filters
-document.querySelectorAll(".filter").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".filter").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    activeFilter = btn.dataset.filter;
-    renderLeads();
+  // ─── Search ──────────────────────────────────────────────────────────────
+  searchInput.addEventListener('input', () => {
+    searchQuery = searchInput.value;
+    if (activeTab === 'leads') renderLeads();
   });
-});
 
-// Track button
-document.getElementById("trackBtn").addEventListener("click", async () => {
-  const name = document.getElementById("trackName").value.trim();
-  const source = document.getElementById("trackSource").value;
-  if (!name) return;
-  const igUsername = name.startsWith("@") ? name.slice(1) : name;
-  await chrome.runtime.sendMessage({
-    type: "IG_FOLLOW",
-    username: igUsername,
-    userId: null,
-    pageUrl: null,
-  });
-  document.getElementById("trackName").value = "";
-  loadLeads();
-});
+  // ─── Auto-refresh every 30s ──────────────────────────────────────────────
+  function startRefresh() {
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = setInterval(() => fetchLeads(false), 30000);
+  }
 
-// Open full dashboard
-document.getElementById("openDashboard").addEventListener("click", () => {
-  chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") });
-});
-
-// Script vault
-const catSelect = document.getElementById("scriptCategory");
-const scriptList = document.getElementById("scriptList");
-
-Object.keys(SCRIPTS).forEach((cat) => {
-  const opt = document.createElement("option");
-  opt.value = cat;
-  opt.textContent = cat;
-  catSelect.appendChild(opt);
-});
-
-function renderScripts() {
-  const cat = catSelect.value;
-  scriptList.innerHTML = (SCRIPTS[cat] || []).map((s) => `
-    <div class="script-item">
-      <p class="script-label">${s.label}</p>
-      <p class="script-text">${s.text}</p>
-      <button class="copy-btn" data-text="${encodeURIComponent(s.text)}">Copy</button>
-    </div>
-  `).join("");
-
-  scriptList.querySelectorAll(".copy-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      navigator.clipboard.writeText(decodeURIComponent(btn.dataset.text));
-      btn.textContent = "Copied!";
-      setTimeout(() => (btn.textContent = "Copy"), 1500);
-    });
-  });
-}
-
-catSelect.addEventListener("change", renderScripts);
-renderScripts();
-
-// Storage listener for realtime updates
-chrome.storage.onChanged.addListener(() => loadLeads());
-
-loadLeads();
+  // ─── Init ────────────────────────────────────────────────────────────────
+  updateSearchVisibility();
+  fetchLeads(true);
+  startRefresh();
+})();

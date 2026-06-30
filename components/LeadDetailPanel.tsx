@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { supabase as getSupabase } from "@/lib/supabase";
 import type { Lead } from "@/hooks/useLeads";
+import { useAutoSave } from "@/hooks/useAutoSave";
 import ScriptsVault from "@/components/ScriptsVault";
 import ComposeEmail from "@/components/ComposeEmail";
 import ComposeSMS from "@/components/ComposeSMS";
@@ -10,7 +11,7 @@ import TouchpointsTab from "@/components/TouchpointsTab";
 
 type Tab = "overview" | "research" | "scripts" | "activity" | "touchpoints";
 
-const SALES_STAGES = ["New", "Warming", "DM Sent", "Qualifying", "Call Offered", "Booked", "Closed", "DQ"];
+const SALES_STAGES = ["New", "Warming", "DM Sent", "Replied", "Qualifying", "Call Offered", "Booked", "Closed", "DQ", "Blocked"];
 const CSM_STAGES = ["Active", "At Risk", "Churned"];
 
 function formatGmv(value: unknown): string {
@@ -41,6 +42,7 @@ function OverviewTab({ lead }: { lead: Lead }) {
   const isSales = SALES_STAGES.includes(lead.stage);
   const stages = isSales ? SALES_STAGES : CSM_STAGES;
   const db = getSupabase();
+  const [notesValue, setNotesValue] = useState(lead.notes ?? "");
 
   async function updateField(field: string, value: string) {
     await db
@@ -56,6 +58,12 @@ function OverviewTab({ lead }: { lead: Lead }) {
       .eq("id", lead.id);
   }
 
+  const { status: notesSaveStatus } = useAutoSave({
+    data: notesValue,
+    onSave: (val) => updateField("notes", val),
+    delay: 1200,
+  });
+
   return (
     <div className="space-y-5">
       {/* Stage selector */}
@@ -66,11 +74,12 @@ function OverviewTab({ lead }: { lead: Lead }) {
             <button
               key={s}
               onClick={() => updateStage(s)}
-              className={`px-3 py-1 rounded-full text-xs border transition-colors ${
+              className="px-3 py-1 rounded-full text-xs border transition-colors"
+              style={
                 lead.stage === s
-                  ? "border-blue-500 bg-blue-900/40 text-blue-300"
-                  : "border-gray-700 text-gray-400 hover:border-gray-500"
-              }`}
+                  ? { borderColor: '#3B82F6', background: 'rgba(59,130,246,0.12)', color: '#93C5FD' }
+                  : { borderColor: '#1A2235', color: '#475569' }
+              }
             >
               {s}
             </button>
@@ -118,18 +127,29 @@ function OverviewTab({ lead }: { lead: Lead }) {
         />
       )}
 
-      {/* Notes */}
+      {/* Notes — auto-saves with debounce */}
       <div>
-        <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Notes</p>
+        <div className="flex items-center justify-between mb-1">
+          <p className="text-xs text-gray-500 uppercase tracking-wide">Notes</p>
+          <span className={`text-xs transition-colors ${
+            notesSaveStatus === "saving" ? "text-amber-500" :
+            notesSaveStatus === "saved"  ? "text-green-500" :
+            notesSaveStatus === "error"  ? "text-red-500"   :
+            notesSaveStatus === "pending"? "text-gray-600"  : "text-transparent"
+          }`}>
+            {notesSaveStatus === "saving"  ? "Saving..." :
+             notesSaveStatus === "saved"   ? "Saved" :
+             notesSaveStatus === "error"   ? "Save failed" :
+             notesSaveStatus === "pending" ? "Unsaved changes" : "·"}
+          </span>
+        </div>
         <textarea
-          key={lead.notes ?? ""}
-          defaultValue={lead.notes ?? ""}
+          value={notesValue}
+          onChange={(e) => setNotesValue(e.target.value)}
           rows={4}
           placeholder="Add notes..."
-          className="w-full text-sm bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 outline-none focus:border-gray-500 resize-none leading-relaxed"
-          onBlur={(e) => updateField("notes", e.target.value)}
+          className="w-full text-sm rounded-lg px-3 py-2 outline-none resize-none leading-relaxed transition-colors" style={{ background: '#0F1420', border: '1px solid #1A2235', color: '#CBD5E1' }}
         />
-        <p className="text-xs text-gray-700 mt-1">Auto-saves on blur</p>
       </div>
     </div>
   );
@@ -156,7 +176,7 @@ function EditableField({
         type={type}
         defaultValue={defaultValue}
         placeholder={placeholder}
-        className="w-full text-sm bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 outline-none focus:border-gray-500"
+        className="w-full text-sm rounded-lg px-3 py-2 outline-none transition-colors" style={{ background: '#0F1420', border: '1px solid #1A2235', color: '#CBD5E1' }}
         onBlur={(e) => onBlur(e.target.value)}
       />
     </div>
@@ -306,7 +326,7 @@ function ResearchTab({ lead }: { lead: Lead }) {
   return (
     <div className="space-y-4">
       {alreadyCustomer && (
-        <div className="bg-blue-900/30 border border-blue-700 rounded-lg px-4 py-3 text-sm text-blue-300">
+        <div className="rounded-xl px-4 py-3 text-sm" style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#93C5FD' }}>
           Already a customer — check CRM before outreach.
         </div>
       )}
@@ -322,7 +342,7 @@ function ResearchTab({ lead }: { lead: Lead }) {
                 href={cp.url}
                 target={cp.url.startsWith("mailto:") || cp.url.startsWith("sms:") ? "_self" : "_blank"}
                 rel="noopener noreferrer"
-                className="flex items-center gap-3 px-3 py-2 bg-gray-900/60 border border-gray-800 rounded-lg hover:border-gray-600 hover:bg-gray-800/60 transition-colors group"
+                className="flex items-center gap-3 px-3 py-2 rounded-xl transition-colors group cursor-pointer" style={{ background: '#0F1420', border: '1px solid #1A2235' }} onMouseEnter={(e)=>(e.currentTarget.style.borderColor='#2A3554')} onMouseLeave={(e)=>(e.currentTarget.style.borderColor='#1A2235')}
               >
                 <span className="text-base w-5 text-center shrink-0">{cp.icon}</span>
                 <span className="text-xs text-gray-400 w-20 shrink-0">{cp.label}</span>
@@ -430,7 +450,7 @@ function OpenerCard({ label, text }: { label: string; text: string }) {
     setTimeout(() => setCopied(false), 1800);
   }
   return (
-    <div className="relative bg-gray-900/60 border border-gray-800 rounded-lg p-3">
+    <div className="relative rounded-xl p-3" style={{ background: '#0F1420', border: '1px solid #1A2235' }}>
       <div className="flex items-center justify-between mb-1.5">
         <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{label}</span>
         <button
@@ -522,16 +542,17 @@ export default function LeadDetailPanel({ lead }: { lead: Lead }) {
   return (
     <div className="space-y-0">
       {/* Tab bar */}
-      <div className="flex border-b border-gray-800">
+      <div className="flex border-b" style={{ borderColor: '#1A2235' }}>
         {tabs.map(({ id: tabId, label, badge }) => (
           <button
             key={tabId}
             onClick={() => setTab(tabId)}
             className={`px-4 py-2 text-sm border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${
               tab === tabId
-                ? "border-blue-500 text-blue-400"
-                : "border-transparent text-gray-500 hover:text-gray-300"
+                ? "text-blue-400"
+                : "border-transparent text-[#475569] hover:text-[#94A3B8]"
             }`}
+            style={tab === tabId ? { borderColor: '#3B82F6', borderBottomWidth: '2px' } : undefined}
           >
             {label}
             {badge !== undefined && (

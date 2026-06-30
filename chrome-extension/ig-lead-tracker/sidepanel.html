@@ -1,52 +1,31 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>FanBasis IG Tracker</title>
-  <link rel="stylesheet" href="styles.css" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sales Ops</title>
+  <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
-  <header class="panel-header">
-    <span class="logo">FanBasis IG</span>
-    <button id="openDashboard" title="Open full dashboard">⬡</button>
-  </header>
-
-  <!-- Manual track -->
-  <section class="track-section">
-    <h3>Track Lead</h3>
-    <div class="row">
-      <input id="trackName" placeholder="@username or name" />
-      <select id="trackSource">
-        <option value="IG">IG</option>
-        <option value="LinkedIn">LinkedIn</option>
-        <option value="SMS">SMS</option>
-        <option value="Email">Email</option>
-        <option value="Manual">Manual</option>
-      </select>
+  <div id="app">
+    <header id="sp-header">
+      <div class="sp-logo"></div>
+      <span class="sp-title">Sales Ops</span>
+      <span id="sp-urgent-badge" class="sp-urgent-badge" style="display:none">0</span>
+    </header>
+    <nav id="sp-tabs">
+      <button class="sp-tab active" data-tab="leads">Leads</button>
+      <button class="sp-tab" data-tab="scripts">Scripts</button>
+      <button class="sp-tab" data-tab="inbox">Inbox</button>
+    </nav>
+    <div id="sp-search-bar">
+      <input id="sp-search" type="text" placeholder="Search leads&hellip;" />
     </div>
-    <button id="trackBtn">+ Add Lead</button>
-  </section>
-
-  <!-- Filters -->
-  <div class="filter-bar">
-    <button class="filter active" data-filter="all">All</button>
-    <button class="filter" data-filter="overdue">Overdue</button>
-    <button class="filter" data-filter="today">Today</button>
-    <button class="filter" data-filter="upcoming">Upcoming</button>
-    <button class="filter" data-filter="booked">Booked</button>
+    <div id="sp-content"></div>
+    <div id="sp-footer">
+      <button id="sp-save-btn" class="sp-save-btn">&#xff0b; Save current profile</button>
+    </div>
   </div>
-
-  <!-- Lead list -->
-  <div id="leadList"></div>
-
-  <!-- Script vault -->
-  <section class="scripts-section" id="scriptsSection" style="display:none">
-    <h3>Scripts</h3>
-    <select id="scriptCategory"></select>
-    <div id="scriptList"></div>
-  </section>
-
-  <script src="scripts-data.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

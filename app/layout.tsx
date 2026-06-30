@@ -4,6 +4,7 @@ import "./globals.css";
 import { ModeProvider } from "@/components/ModeProvider";
 import Nav from "@/components/Nav";
 import SessionWrapper from "@/components/SessionWrapper";
+import { ToastProvider } from "@/components/ui/toast";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -15,11 +16,15 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark">
-      <body className={`${inter.className} bg-gray-950 text-gray-100 min-h-screen`}>
+      <body className={`${inter.className} min-h-screen`}>
         <SessionWrapper>
           <ModeProvider>
-            <Nav />
-            <main className="p-6">{children}</main>
+            <ToastProvider>
+              <div className="flex min-h-screen">
+                <Nav />
+                <main className="flex-1 min-w-0 overflow-y-auto p-6 bg-[#070B12]">{children}</main>
+              </div>
+            </ToastProvider>
           </ModeProvider>
         </SessionWrapper>
       </body>
