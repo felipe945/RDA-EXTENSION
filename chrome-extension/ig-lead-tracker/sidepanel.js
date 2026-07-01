@@ -1253,24 +1253,38 @@ async function calInitSettings() {
 
 document.getElementById("calConnectBtn")?.addEventListener("click", async () => {
   const btn = document.getElementById("calConnectBtn");
+  const note = document.getElementById("calClientIdNote");
+  if (note) note.style.display = "none";
   btn.textContent = "Connecting…";
   btn.disabled = true;
-  const result = await chrome.runtime.sendMessage({ type: "CONNECT_CALENDAR" }).catch(() => null);
+  let result = null;
+  try {
+    result = await chrome.runtime.sendMessage({ type: "CONNECT_CALENDAR" });
+  } catch (e) {
+    result = { ok: false, error: e.message };
+  }
   btn.textContent = "Connect Google Calendar";
   btn.disabled = false;
   if (result?.ok) {
     await calInitSettings();
   } else {
-    if (result?.error === "setup_required" || result?.error === "not_connected") {
-      const note = document.getElementById("calClientIdNote");
-      if (note) note.style.display = "block";
+    const err = result?.error || "unknown_error";
+    if (note) {
+      if (err === "setup_required") {
+        note.textContent = "⚠ Client ID not configured in background.js.";
+      } else if (err === "cancelled" || err === "The user did not approve access.") {
+        note.textContent = "⚠ Auth cancelled. Make sure you're added as a test user in Google Cloud Console → OAuth consent screen → Test users.";
+      } else {
+        note.textContent = `⚠ Error: ${err}`;
+      }
+      note.style.display = "block";
     }
     btn.style.borderColor = "#7f1d1d";
     btn.style.color = "#ef4444";
     setTimeout(() => {
       btn.style.borderColor = "#1d4ed8";
       btn.style.color = "#93c5fd";
-    }, 3000);
+    }, 4000);
   }
 });
 
