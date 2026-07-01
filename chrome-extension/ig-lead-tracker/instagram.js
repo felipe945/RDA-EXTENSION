@@ -71,6 +71,11 @@
   let dismissedFor = null;
   let cardPos = { top: null, left: null };
 
+  // Only one DM-send watch may be live at a time — a stale watch from an
+  // abandoned send must never auto-commit a later, unrelated ig_dm_sent.
+  // (Human attestation via "✓ I sent it" is unaffected by cancellation.)
+  let activeSendWatchCancel = null;
+
   const FB_PENDING_KEY = "fb_pendingDm";
 
   function getPendingDm() {
@@ -248,6 +253,17 @@
       if (m && valid(m[1])) return m[1].toLowerCase();
     }
     return null;
+  }
+
+  // Contract B: activeIgAccount is written to chrome.storage.local together with
+  // activeIgAccountTs (epoch ms). It may only be trusted while fresh — older than
+  // ACCOUNT_MAX_AGE_MS means "unknown", never "assume FanBasis".
+  const ACCOUNT_MAX_AGE_MS = 5 * 60 * 1000;
+
+  function freshActiveIgAccount(handle, ts) {
+    if (!handle || !ts) return "";
+    if (Date.now() - ts > ACCOUNT_MAX_AGE_MS) return "";
+    return String(handle).toLowerCase();
   }
 
   function autoTypeInIgDm(text) {
@@ -510,6 +526,10 @@
 
   function buildCard() {
     removeCard();
+    // A fresh card means any in-flight send watch belongs to an abandoned flow.
+    // (removeCard alone must NOT cancel — it also fires when navigating into the
+    // DM thread, where the watch legitimately waits for ig_dm_sent.)
+    if (activeSendWatchCancel) activeSendWatchCancel();
     injectStyles();
 
     const card = document.createElement("div");
@@ -651,13 +671,15 @@
   function renderSwitchPrompt(card, b, username, channel, lead, onSwitchComplete, crossChannelIntro) {
     Promise.all([
       getSettings(),
-      new Promise(r => chrome.storage.local.get({ activeIgAccount: "" }, r)),
-    ]).then(([{ personalIgUsername, fanbasisHandle: fbH }, { activeIgAccount }]) => {
+      new Promise(r => chrome.storage.local.get({ activeIgAccount: "", activeIgAccountTs: 0 }, r)),
+    ]).then(([{ personalIgUsername, fanbasisHandle: fbH }, { activeIgAccount, activeIgAccountTs }]) => {
       const target = channel === "ig_personal"
         ? (personalIgUsername || "").replace(/^@/, "")
         : (fbH || "fanbasis").replace(/^@/, "");
 
-      const currentAcct = (activeIgAccount || detectCurrentIgAccountFromDom() || "").toLowerCase();
+      // Skip the switch only on a fresh account signal (Contract B) or live DOM
+      // detection — a stale activeIgAccount must not be trusted to skip the prompt
+      const currentAcct = (freshActiveIgAccount(activeIgAccount, activeIgAccountTs) || detectCurrentIgAccountFromDom() || "").toLowerCase();
       if (target && currentAcct === target.toLowerCase()) {
         clearPendingDm();
         if (onSwitchComplete) { onSwitchComplete(); return; }
@@ -769,8 +791,8 @@
         // Kick fresh DOM detection, then read what storage has
         document.dispatchEvent(new CustomEvent("ig_viewer_check", { bubbles: true, composed: true }));
         setTimeout(() => {
-          chrome.storage.local.get({ activeIgAccount: "" }, ({ activeIgAccount }) => {
-            const detected = (activeIgAccount || detectCurrentIgAccountFromDom() || "").toLowerCase();
+          chrome.storage.local.get({ activeIgAccount: "", activeIgAccountTs: 0 }, ({ activeIgAccount, activeIgAccountTs }) => {
+            const detected = (freshActiveIgAccount(activeIgAccount, activeIgAccountTs) || detectCurrentIgAccountFromDom() || "").toLowerCase();
             if (!target || detected === target.toLowerCase()) {
               cleanup();
               clearPendingDm();
@@ -800,7 +822,8 @@
       btnRow.style.cssText = "display:flex;gap:6px";
 
       const sendNowBtn = document.createElement("button");
-      sendNowBtn.textContent = "Skip — send as current account";
+      // Label the account this will actually send from — never imply the target
+      sendNowBtn.textContent = currentAcct ? `Skip — send as @${currentAcct}` : "Skip — send from unknown account";
       sendNowBtn.style.cssText = "flex:1;background:#161616;border:1px solid #252525;border-radius:8px;color:#555;font-size:10px;font-weight:600;padding:7px 4px;cursor:pointer";
       sendNowBtn.addEventListener("click", () => {
         cleanup();
@@ -1311,7 +1334,7 @@
           aiBadge.style.animation = "none";
           ta.style.borderColor = "#7c3aed44";
           const aiScripts = [{ label: "✨ AI", text: data.opener }, ...scripts];
-          if (!sent) {
+          if (!sent && !clicked) {
             ta.value = aiScripts[0].text;
             autoResizeTa();
           }
@@ -1332,16 +1355,25 @@
     confirmBtn.textContent = "📨 Send";
     confirmBtn.style.cssText = "flex:1;background:#FF3A69;border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;padding:9px 8px;cursor:pointer";
 
+    // Invariant: lead state advances only when the network confirms the send
+    // (ig_dm_sent, Contract A) or a human explicitly attests ("✓ I sent it") —
+    // never on the mere act of clicking Send.
+    const SEND_CONFIRM_TIMEOUT_MS = 8000;
     let sent = false;
-    confirmBtn.addEventListener("click", () => {
+    let clicked = false;
+    let confirmTimer = null;
+
+    function cleanupSendWatch() {
+      document.removeEventListener("ig_dm_sent", onDmSent);
+      clearTimeout(confirmTimer);
+      confirmTimer = null;
+      if (activeSendWatchCancel === cleanupSendWatch) activeSendWatchCancel = null;
+    }
+
+    function commitSent() {
       if (sent) return;
       sent = true;
-
-      const text = ta.value.trim();
-      if (text) navigator.clipboard.writeText(text).catch(() => {});
-      openIgDm(username);
-      if (text) setTimeout(() => autoTypeInIgDm(text), 1200);
-      autoConfirmIgDialog();
+      cleanupSendWatch();
 
       if (opts.channel) {
         const leadId = opts.leadId || opts.lead?.id;
@@ -1361,29 +1393,55 @@
         }
       }
 
-      const advance = () => {
-        preview.remove();
-        b.style.display = "";
-        if (opts.afterSend) opts.afterSend();
-      };
+      preview.remove();
+      b.style.display = "";
+      if (opts.afterSend) opts.afterSend({ confirmed: true });
+    }
 
-      // Immediately show green confirm — user just needs to tap after sending
-      confirmBtn.textContent = "✓ Done — I sent it";
-      confirmBtn.style.background = "#166534";
-      confirmBtn.style.border = "1px solid #22c55e";
-      confirmBtn.style.color = "#4ade80";
-      confirmBtn.disabled = false;
-      confirmBtn.addEventListener("click", advance, { once: true });
+    function onDmSent() { commitSent(); }
 
-      // Also auto-advance if IG network intercept fires
-      const onDmSent = () => { document.removeEventListener("ig_dm_sent", onDmSent); advance(); };
+    confirmBtn.addEventListener("click", () => {
+      if (sent || clicked) return;
+      clicked = true;
+
+      if (activeSendWatchCancel) activeSendWatchCancel();
+      activeSendWatchCancel = cleanupSendWatch;
+
+      const text = ta.value.trim();
+      if (text) navigator.clipboard.writeText(text).catch(() => {});
+      openIgDm(username);
+      if (text) setTimeout(() => autoTypeInIgDm(text), 1200);
+      autoConfirmIgDialog();
+
+      // Pending: wait for the network to confirm the send actually happened
+      confirmBtn.textContent = "⏳ Waiting for send…";
+      confirmBtn.disabled = true;
+      confirmBtn.style.background = "#1a1a1a";
+      confirmBtn.style.border = "1px solid #333";
+      confirmBtn.style.color = "#888";
+      confirmBtn.style.cursor = "default";
+
       document.addEventListener("ig_dm_sent", onDmSent);
+
+      // No confirmation in time → require explicit human attestation instead
+      confirmTimer = setTimeout(() => {
+        confirmTimer = null;
+        if (sent) return;
+        confirmBtn.textContent = "✓ I sent it";
+        confirmBtn.disabled = false;
+        confirmBtn.style.background = "#166534";
+        confirmBtn.style.border = "1px solid #22c55e";
+        confirmBtn.style.color = "#4ade80";
+        confirmBtn.style.cursor = "pointer";
+        confirmBtn.addEventListener("click", commitSent, { once: true });
+      }, SEND_CONFIRM_TIMEOUT_MS);
     });
 
     const backBtn = document.createElement("button");
     backBtn.textContent = "← Back";
     backBtn.style.cssText = "background:#161616;border:1px solid #252525;border-radius:8px;color:#94a3b8;font-size:12px;font-weight:600;padding:9px 12px;cursor:pointer;flex-shrink:0";
     backBtn.addEventListener("click", () => {
+      cleanupSendWatch();
       preview.remove();
       b.style.display = "";
     });
@@ -1463,20 +1521,23 @@
     // Wait 150ms for interceptor + storage write, then read the freshened value
     const detect = () => Promise.all([
       getSettings(),
-      new Promise(r => chrome.storage.local.get({ activeIgAccount: "" }, r)),
+      new Promise(r => chrome.storage.local.get({ activeIgAccount: "", activeIgAccountTs: 0 }, r)),
     ]);
 
-    new Promise(r => setTimeout(r, 150)).then(detect).then(([{ personalIgUsername, fanbasisHandle: fbH }, { activeIgAccount }]) => {
+    new Promise(r => setTimeout(r, 150)).then(detect).then(([{ personalIgUsername, fanbasisHandle: fbH }, { activeIgAccount, activeIgAccountTs }]) => {
       const fbAcct  = (fbH || "fanbasis").replace(/^@/, "").toLowerCase();
       const persAcct = (personalIgUsername || "").toLowerCase();
-      // activeIgAccount comes from page-interceptor reading real IG API responses — most reliable
-      const currentAcct = (activeIgAccount || detectCurrentIgAccountFromDom() || "").toLowerCase();
-      const isOnFb   = currentAcct && currentAcct.toLowerCase() === fbAcct;
-      const isOnPers = currentAcct && currentAcct.toLowerCase() === persAcct;
+      // activeIgAccount comes from page-interceptor reading real IG API responses,
+      // trusted only while fresh (Contract B); otherwise fall back to DOM detection
+      const currentAcct = (freshActiveIgAccount(activeIgAccount, activeIgAccountTs) || detectCurrentIgAccountFromDom() || "").toLowerCase();
+      const isOnFb   = !!currentAcct && currentAcct === fbAcct;
+      const isOnPers = !!currentAcct && currentAcct === persAcct;
 
-      const firstCh  = isOnFb ? "ig_fanbasis" : isOnPers ? "ig_personal" : "ig_fanbasis";
-      const secondCh = firstCh === "ig_fanbasis" ? "ig_personal" : "ig_fanbasis";
-      const secondTarget = secondCh === "ig_personal" ? persAcct : fbAcct;
+      // No silent default: if the account can't be confirmed as FB or Personal,
+      // the rep must pick one before Send enables
+      let firstCh = isOnFb ? "ig_fanbasis" : isOnPers ? "ig_personal" : null;
+      const secondChOf = (ch) => ch === "ig_personal" ? "ig_fanbasis" : "ig_personal";
+      const secondTargetOf = (ch) => secondChOf(ch) === "ig_personal" ? persAcct : fbAcct;
 
       const acctColor = isOnFb ? "#22c55e" : isOnPers ? "#3b82f6" : "#f59e0b";
       const acctLabel = currentAcct ? `@${currentAcct}` : "Account not detected";
@@ -1490,14 +1551,14 @@
       pill.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:${acctColor};display:inline-block;flex-shrink:0"></span>${acctLabel}`;
       pillRow.appendChild(pill);
 
-      // Switch account button — always visible when second account is configured
-      if (secondTarget) {
-        const otherLabel = secondCh === "ig_personal" ? `@${persAcct}` : `@${fbAcct}`;
+      // Switch account button — visible once the current account is confirmed
+      if (firstCh && secondTargetOf(firstCh)) {
+        const otherLabel = `@${secondTargetOf(firstCh)}`;
         const switchLink = document.createElement("button");
         switchLink.textContent = `⇄ switch to ${otherLabel}`;
         switchLink.style.cssText = "background:none;border:none;color:#3b82f6;font-size:9px;font-weight:600;cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:2px";
         switchLink.addEventListener("click", () => {
-          renderSwitchPrompt(card, b, username, secondCh, lead, null, null);
+          renderSwitchPrompt(card, b, username, secondChOf(firstCh), lead, null, null);
         });
         pillRow.appendChild(switchLink);
       }
@@ -1507,6 +1568,44 @@
       const dmBtn = document.createElement("button");
       dmBtn.textContent = "📨 Send DM";
       dmBtn.style.cssText = "width:100%;background:#FF3A69;border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;padding:9px;cursor:pointer";
+
+      // Unknown account → block Send until the rep confirms which one they're on,
+      // so a DM is never silently sent (and tagged) as FanBasis by default
+      if (!firstCh) {
+        dmBtn.disabled = true;
+        dmBtn.style.opacity = ".45";
+        dmBtn.style.cursor = "default";
+
+        const notice = document.createElement("div");
+        notice.style.cssText = "background:#2d1a00;border:1px solid #92400e;border-radius:7px;padding:7px 9px;margin-bottom:5px";
+        const noticeLabel = document.createElement("div");
+        noticeLabel.textContent = "Confirm which account you're on";
+        noticeLabel.style.cssText = "font-size:10px;color:#fbbf24;font-weight:600;margin-bottom:5px";
+        notice.appendChild(noticeLabel);
+
+        const pickRow = document.createElement("div");
+        pickRow.style.cssText = "display:flex;gap:5px";
+        function mkPick(label, ch, dotColor) {
+          const pb = document.createElement("button");
+          pb.textContent = label;
+          pb.style.cssText = "flex:1;background:#161616;border:1px solid #2a2a35;border-radius:6px;color:#94a3b8;font-size:10px;font-weight:600;padding:5px 4px;cursor:pointer";
+          pb.addEventListener("click", () => {
+            firstCh = ch;
+            notice.remove();
+            dmBtn.disabled = false;
+            dmBtn.style.opacity = "";
+            dmBtn.style.cursor = "pointer";
+            const handle = ch === "ig_fanbasis" ? fbAcct : persAcct;
+            pill.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:${dotColor};display:inline-block;flex-shrink:0"></span>@${handle} · confirmed by you`;
+          });
+          return pb;
+        }
+        pickRow.appendChild(mkPick(`FanBasis (@${fbAcct})`, "ig_fanbasis", "#22c55e"));
+        if (persAcct) pickRow.appendChild(mkPick(`Personal (@${persAcct})`, "ig_personal", "#3b82f6"));
+        notice.appendChild(pickRow);
+        wrap.appendChild(notice);
+      }
+
       wrap.appendChild(dmBtn);
 
       function completeBothSends() {
@@ -1525,11 +1624,10 @@
         done.textContent = "✓ Both channels done — DM Sent!";
         b.appendChild(done);
         // Next lead button
-        chrome.runtime.sendMessage({ type: "GET_LEADS" }, (resp) => {
-          const DONE_STAGES = ["DM Sent","Replied","Qualifying","Call Offered","Booked","Closed","DQ"];
-          const nextLead = (resp?.leads || [])
-            .filter(l => !DONE_STAGES.includes(l.stage) && l.id !== lead?.id && (l.ig_username || l.ig_profile_url))
-            .sort((a, x) => (x.score ?? 0) - (a.score ?? 0))[0];
+        chrome.runtime.sendMessage({ type: "GET_LEADS" }, async (resp) => {
+          const { fb_snoozed = {} } = await chrome.storage.local.get({ fb_snoozed: {} }).catch(() => ({ fb_snoozed: {} }));
+          const queue = window.FBQueue.buildQueue(resp?.leads || [], { channel: "ig", snoozed: fb_snoozed });
+          const nextLead = queue.find((l) => l.id !== lead?.id);
           if (nextLead) {
             const nextUrl = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
             const nextBtn = document.createElement("button");
@@ -1541,12 +1639,16 @@
         });
       }
 
-      function handleAfterFirstSend() {
+      function handleAfterFirstSend(commit) {
+        const firstTouchConfirmed = !!(commit && commit.confirmed);
+        const secondCh = secondChOf(firstCh);
+        const secondTarget = secondTargetOf(firstCh);
         if (!secondTarget) { completeBothSends(); return; }
 
-        // Build cross-channel bridge message for the second DM
-        // Tells the lead they're being contacted from both accounts
-        const crossChannelIntro = firstCh === "ig_fanbasis"
+        // Build cross-channel bridge message for the second DM — but only if
+        // touch #1 actually went out (commitSent ran). An unconfirmed first
+        // touch gets a standalone opener instead of a bridge referencing it.
+        const crossChannelIntro = !firstTouchConfirmed ? null : firstCh === "ig_fanbasis"
           ? `Hey [Name] — it's me again from my personal (@${persAcct})! I also just messaged you from @${fbAcct} — wanted to reach out from both so you have options.\n\nHappy to connect on either one!`
           : `Hey [Name] — on the partnerships team at @${fbAcct}. I also just reached out to you from my personal (@${persAcct}).\n\nWe work with high-ticket creators through lower fees, BNPL at checkout, and a lead qualifier that screens buyers before the call. Happy to find time this week if it makes sense.`;
 
@@ -1665,17 +1767,13 @@
   }
 
   function navigateToNextLead(container, username, currentLeadId, dashboardUrl) {
-    const DONE_STAGES_NAV = ["DM Sent","Replied","Qualifying","Call Offered","Booked","Closed","DQ"];
     chrome.runtime.sendMessage({ type: "GET_LEADS" }, async (resp) => {
       const all = resp?.leads || [];
-      const queue = all
-        .filter(l => !DONE_STAGES_NAV.includes(l.stage) && (l.ig_username || l.ig_profile_url))
-        .sort((a, x) => (x.score ?? 0) - (a.score ?? 0));
-      const pos = queue.findIndex(l => l.id === currentLeadId);
-      const nextLead = queue.find(l => l.id !== currentLeadId);
-      if (!nextLead) return;
-
       const { fb_snoozed = {} } = await chrome.storage.local.get({ fb_snoozed: {} }).catch(() => ({ fb_snoozed: {} }));
+      const queue = window.FBQueue.buildQueue(all, { channel: "ig", snoozed: fb_snoozed });
+      const pos = queue.findIndex((l) => l.id === currentLeadId);
+      const nextLead = queue.find((l) => l.id !== currentLeadId);
+      if (!nextLead) return;
 
       const navWrap = document.createElement("div");
       navWrap.style.cssText = "margin-top:8px;border-top:1px solid #1a1a22;padding-top:8px";
@@ -1879,12 +1977,11 @@
         done.style.cssText = "margin-top:8px;padding:8px 10px;background:#0d2b0d;border:1px solid #166534;border-radius:7px;color:#4ade80;font-size:11px;font-weight:600;text-align:center";
         done.textContent = "✓ Both channels done — DM Sent!";
         b.appendChild(done);
-        chrome.runtime.sendMessage({ type: "GET_LEADS" }, (resp) => {
-          const DONE_STAGES = ["DM Sent","Replied","Qualifying","Call Offered","Booked","Closed","DQ"];
+        chrome.runtime.sendMessage({ type: "GET_LEADS" }, async (resp) => {
+          const { fb_snoozed = {} } = await chrome.storage.local.get({ fb_snoozed: {} }).catch(() => ({ fb_snoozed: {} }));
           const currentLeadId = secondTouch.leadId || lead?.id;
-          const nextLead = (resp?.leads || [])
-            .filter(l => !DONE_STAGES.includes(l.stage) && l.id !== currentLeadId && (l.ig_username || l.ig_profile_url))
-            .sort((a, x) => (x.score ?? 0) - (a.score ?? 0))[0];
+          const queue = window.FBQueue.buildQueue(resp?.leads || [], { channel: "ig", snoozed: fb_snoozed });
+          const nextLead = queue.find((l) => l.id !== currentLeadId);
           if (nextLead) {
             const nextUrl = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
             const nextBtn = document.createElement("button");
@@ -2232,12 +2329,11 @@
         done.textContent = "✓ Both channels done — DM Sent!";
         b.appendChild(done);
         // Next lead button — same logic as completeBothSends
-        chrome.runtime.sendMessage({ type: "GET_LEADS" }, (resp) => {
-          const DONE_STAGES = ["DM Sent","Replied","Qualifying","Call Offered","Booked","Closed","DQ"];
+        chrome.runtime.sendMessage({ type: "GET_LEADS" }, async (resp) => {
+          const { fb_snoozed = {} } = await chrome.storage.local.get({ fb_snoozed: {} }).catch(() => ({ fb_snoozed: {} }));
           const currentLeadId = secondTouch.leadId || lead?.id;
-          const nextLead = (resp?.leads || [])
-            .filter(l => !DONE_STAGES.includes(l.stage) && l.id !== currentLeadId && (l.ig_username || l.ig_profile_url))
-            .sort((a, x) => (x.score ?? 0) - (a.score ?? 0))[0];
+          const queue = window.FBQueue.buildQueue(resp?.leads || [], { channel: "ig", snoozed: fb_snoozed });
+          const nextLead = queue.find((l) => l.id !== currentLeadId);
           if (nextLead) {
             const nextUrl = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
             const nextBtn = document.createElement("button");
