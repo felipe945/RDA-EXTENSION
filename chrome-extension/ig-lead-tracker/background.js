@@ -6,6 +6,48 @@
 
 const DEFAULT_URL = "https://unified-sales-ops.vercel.app";
 
+// ── Google Calendar OAuth (launchWebAuthFlow) ─────────────────────────────────
+// Extension ID is locked via manifest "key"; ID = ckiknpaiindhapocfloenompedkgneoa
+// User must create a "Web Application" OAuth 2.0 client in Google Cloud Console
+// and add redirect URI: https://ckiknpaiindhapocfloenompedkgneoa.chromiumapp.org/
+// Replace GCAL_CLIENT_ID below with the client_id from that OAuth client.
+const GCAL_CLIENT_ID = "PASTE_YOUR_WEB_APP_CLIENT_ID_HERE";
+const GCAL_REDIRECT = "https://ckiknpaiindhapocfloenompedkgneoa.chromiumapp.org/";
+const GCAL_SCOPES = [
+  "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
+  "email",
+  "profile",
+].join(" ");
+
+async function getCalToken(interactive) {
+  const { cal_token, cal_token_exp } = await chrome.storage.local.get({ cal_token: null, cal_token_exp: 0 });
+  if (cal_token && cal_token_exp - Date.now() > 5 * 60 * 1000) return cal_token;
+  if (!interactive) throw new Error("not_connected");
+  // Re-auth silently if possible, else prompt
+  const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  authUrl.searchParams.set("client_id", GCAL_CLIENT_ID);
+  authUrl.searchParams.set("redirect_uri", GCAL_REDIRECT);
+  authUrl.searchParams.set("response_type", "token");
+  authUrl.searchParams.set("scope", GCAL_SCOPES);
+  authUrl.searchParams.set("prompt", "none");
+  try {
+    const url = await new Promise((res, rej) =>
+      chrome.identity.launchWebAuthFlow({ url: authUrl.toString(), interactive: false }, u => {
+        if (chrome.runtime.lastError || !u) rej(new Error("silent_failed"));
+        else res(u);
+      })
+    );
+    const token = new URLSearchParams(new URL(url).hash.slice(1)).get("access_token");
+    const exp = parseInt(new URLSearchParams(new URL(url).hash.slice(1)).get("expires_in") || "3600");
+    if (!token) throw new Error("no_token");
+    await chrome.storage.local.set({ cal_token: token, cal_token_exp: Date.now() + exp * 1000 });
+    return token;
+  } catch {
+    throw new Error("not_connected");
+  }
+}
+
 // ── Google Calendar helpers ───────────────────────────────────────────────────
 
 function calFindOpenSlots(freeBusyData, slotMins, maxSlots) {
@@ -359,12 +401,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       case "CONNECT_CALENDAR": {
         try {
-          const token = await new Promise((resolve, reject) => {
-            chrome.identity.getAuthToken({ interactive: true }, (t) => {
-              if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-              else resolve(t);
-            });
-          });
+          if (GCAL_CLIENT_ID === "PASTE_YOUR_WEB_APP_CLIENT_ID_HERE") {
+            sendResponse({ ok: false, error: "setup_required" });
+            break;
+          }
+          const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+          authUrl.searchParams.set("client_id", GCAL_CLIENT_ID);
+          authUrl.searchParams.set("redirect_uri", GCAL_REDIRECT);
+          authUrl.searchParams.set("response_type", "token");
+          authUrl.searchParams.set("scope", GCAL_SCOPES);
+          authUrl.searchParams.set("prompt", "select_account");
+          const responseUrl = await new Promise((resolve, reject) =>
+            chrome.identity.launchWebAuthFlow({ url: authUrl.toString(), interactive: true }, (url) => {
+              if (chrome.runtime.lastError || !url) reject(new Error(chrome.runtime.lastError?.message || "cancelled"));
+              else resolve(url);
+            })
+          );
+          const hash = new URL(responseUrl).hash.slice(1);
+          const params = new URLSearchParams(hash);
+          const token = params.get("access_token");
+          const expiresIn = parseInt(params.get("expires_in") || "3600");
+          if (!token) throw new Error("no_token");
+          const expiresAt = Date.now() + expiresIn * 1000;
           const resp = await fetch(
             "https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=reader",
             { headers: { Authorization: `Bearer ${token}` } }
@@ -379,7 +437,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           }));
           const primaryCal = calendars.find(c => c.primary);
           const calUserName = primaryCal?.summary || "";
-          await chrome.storage.local.set({ cal_token: token, cal_calendars: calendars, cal_user_name: calUserName });
+          await chrome.storage.local.set({ cal_token: token, cal_token_exp: expiresAt, cal_calendars: calendars, cal_user_name: calUserName });
           const existing = await new Promise(r => chrome.storage.sync.get({ cal_selected: [] }, r));
           if (!existing.cal_selected.length) {
             const primaryId = (calendars.find(c => c.primary) || calendars[0])?.id;
@@ -395,10 +453,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case "DISCONNECT_CALENDAR": {
         const { cal_token: t } = await chrome.storage.local.get({ cal_token: null });
         if (t) {
-          chrome.identity.removeCachedAuthToken({ token: t }, () => {});
           await fetch(`https://accounts.google.com/o/oauth2/revoke?token=${t}`).catch(() => {});
         }
-        await chrome.storage.local.remove(["cal_token", "cal_calendars"]);
+        await chrome.storage.local.remove(["cal_token", "cal_token_exp", "cal_calendars"]);
         await chrome.storage.sync.remove(["cal_selected", "cal_slot_mins"]);
         sendResponse({ ok: true });
         break;
@@ -419,12 +476,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       case "CREATE_CALENDAR_EVENT": {
         try {
-          const token = await new Promise((resolve, reject) => {
-            chrome.identity.getAuthToken({ interactive: false }, (t) => {
-              if (chrome.runtime.lastError || !t) reject(new Error("not_connected"));
-              else resolve(t);
-            });
-          });
+          const token = await getCalToken(false);
           const { slotStart, slotEnd, leadName, guestEmail } = msg;
           const { cal_user_name: userName = "FanBasis" } = await chrome.storage.local.get({ cal_user_name: "" });
           const displayLead = (leadName || "Lead").split(" ").slice(0, 2).join(" ");
@@ -455,12 +507,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       case "GET_CALENDAR_SLOTS": {
         try {
-          const token = await new Promise((resolve, reject) => {
-            chrome.identity.getAuthToken({ interactive: false }, (t) => {
-              if (chrome.runtime.lastError || !t) reject(new Error("not_connected"));
-              else resolve(t);
-            });
-          });
+          const token = await getCalToken(false);
           const { cal_selected: selected = [], cal_slot_mins: slotMins = 30 } =
             await new Promise(r => chrome.storage.sync.get({ cal_selected: [], cal_slot_mins: 30 }, r));
           if (!selected.length) { sendResponse({ ok: false, error: "no_calendars" }); break; }

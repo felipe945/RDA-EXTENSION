@@ -1261,8 +1261,10 @@ document.getElementById("calConnectBtn")?.addEventListener("click", async () => 
   if (result?.ok) {
     await calInitSettings();
   } else {
-    const note = document.getElementById("calClientIdNote");
-    if (note) note.style.display = "block";
+    if (result?.error === "setup_required" || result?.error === "not_connected") {
+      const note = document.getElementById("calClientIdNote");
+      if (note) note.style.display = "block";
+    }
     btn.style.borderColor = "#7f1d1d";
     btn.style.color = "#ef4444";
     setTimeout(() => {
