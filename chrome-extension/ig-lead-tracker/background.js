@@ -11,7 +11,7 @@ const DEFAULT_URL = "https://unified-sales-ops.vercel.app";
 // User must create a "Web Application" OAuth 2.0 client in Google Cloud Console
 // and add redirect URI: https://ckiknpaiindhapocfloenompedkgneoa.chromiumapp.org/
 // Replace GCAL_CLIENT_ID below with the client_id from that OAuth client.
-const GCAL_CLIENT_ID = "900158593205-m0opcpaqn5lg8ejr2d9r3cdjfrrg0hdj.apps.googleusercontent.com";
+const GCAL_CLIENT_ID = "900158593205-51agpesm5j4bsutsccc6trkh5ous061j.apps.googleusercontent.com";
 const GCAL_REDIRECT = "https://ckiknpaiindhapocfloenompedkgneoa.chromiumapp.org/";
 const GCAL_SCOPES = [
   "https://www.googleapis.com/auth/calendar.readonly",
@@ -401,6 +401,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       case "CONNECT_CALENDAR": {
         try {
+          console.log("[CAL] CONNECT_CALENDAR start, client_id:", GCAL_CLIENT_ID.slice(0, 20) + "…");
           if (GCAL_CLIENT_ID === "PASTE_YOUR_WEB_APP_CLIENT_ID_HERE") {
             sendResponse({ ok: false, error: "setup_required" });
             break;
@@ -411,22 +412,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           authUrl.searchParams.set("response_type", "token");
           authUrl.searchParams.set("scope", GCAL_SCOPES);
           authUrl.searchParams.set("prompt", "select_account");
+          console.log("[CAL] launching flow, redirect:", GCAL_REDIRECT);
           const responseUrl = await new Promise((resolve, reject) =>
             chrome.identity.launchWebAuthFlow({ url: authUrl.toString(), interactive: true }, (url) => {
+              console.log("[CAL] launchWebAuthFlow callback, url:", url, "error:", chrome.runtime.lastError?.message);
               if (chrome.runtime.lastError || !url) reject(new Error(chrome.runtime.lastError?.message || "cancelled"));
               else resolve(url);
             })
           );
+          console.log("[CAL] responseUrl:", responseUrl);
           const hash = new URL(responseUrl).hash.slice(1);
           const params = new URLSearchParams(hash);
           const token = params.get("access_token");
           const expiresIn = parseInt(params.get("expires_in") || "3600");
-          if (!token) throw new Error("no_token");
+          console.log("[CAL] token present:", !!token, "error param:", params.get("error"));
+          if (!token) throw new Error(params.get("error") || "no_token");
           const expiresAt = Date.now() + expiresIn * 1000;
           const resp = await fetch(
             "https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=reader",
             { headers: { Authorization: `Bearer ${token}` } }
           );
+          console.log("[CAL] calendarList status:", resp.status);
           if (!resp.ok) throw new Error(`calendarList ${resp.status}`);
           const data = await resp.json();
           const calendars = (data.items || []).map(c => ({
@@ -443,8 +449,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             const primaryId = (calendars.find(c => c.primary) || calendars[0])?.id;
             if (primaryId) await chrome.storage.sync.set({ cal_selected: [primaryId] });
           }
+          console.log("[CAL] connected, calendars:", calendars.length);
           sendResponse({ ok: true, calendars });
         } catch (err) {
+          console.error("[CAL] error:", err.message);
           sendResponse({ ok: false, error: err.message });
         }
         break;
