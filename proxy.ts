@@ -60,7 +60,6 @@ export const config = {
     "/leads/:path*",
     "/inbox/:path*",
     "/outreach/:path*",
-    "/summary/:path*",
     "/scripts/:path*",
     "/settings/:path*",
     "/api/:path*",

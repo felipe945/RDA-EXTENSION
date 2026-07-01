@@ -4,14 +4,13 @@ import { usePathname } from "next/navigation";
 import { useMode } from "@/components/ModeProvider";
 import { useSession, signIn, signOut } from "next-auth/react";
 import { useEffect, useState } from "react";
-import { LayoutGrid, Send, MessageSquare, BookOpen, Sun, Users } from "lucide-react";
+import { LayoutGrid, Send, MessageSquare, BookOpen, Users } from "lucide-react";
 
 const NAV_LINKS = [
   { href: "/",              label: "Dashboard", icon: LayoutGrid },
   { href: "/outreach",      label: "Outreach",  icon: Send },
   { href: "/inbox",         label: "Inbox",     icon: MessageSquare },
   { href: "/scripts",       label: "Scripts",   icon: BookOpen },
-  { href: "/summary",       label: "Briefing",  icon: Sun },
   { href: "/settings/team", label: "Team",      icon: Users },
 ];
 
