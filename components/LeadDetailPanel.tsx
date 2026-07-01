@@ -8,6 +8,7 @@ import ScriptsVault from "@/components/ScriptsVault";
 import ComposeEmail from "@/components/ComposeEmail";
 import ComposeSMS from "@/components/ComposeSMS";
 import TouchpointsTab from "@/components/TouchpointsTab";
+import BookCallModal from "@/components/BookCallModal";
 
 type Tab = "overview" | "research" | "scripts" | "activity" | "touchpoints";
 
@@ -43,6 +44,7 @@ function OverviewTab({ lead }: { lead: Lead }) {
   const stages = isSales ? SALES_STAGES : CSM_STAGES;
   const db = getSupabase();
   const [notesValue, setNotesValue] = useState(lead.notes ?? "");
+  const [showBookCall, setShowBookCall] = useState(false);
 
   async function updateField(field: string, value: string) {
     await db
@@ -124,6 +126,24 @@ function OverviewTab({ lead }: { lead: Lead }) {
         <ComposeSMS
           leadId={lead.id}
           to={lead.phone}
+        />
+      )}
+
+      {/* Book a Call CTA */}
+      <button
+        onClick={() => setShowBookCall(true)}
+        className="w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-all"
+        style={{ background: 'linear-gradient(135deg, #FF3A69, #c0294d)', color: 'white', boxShadow: '0 4px 16px rgba(255,58,105,0.25)' }}
+        onMouseEnter={e => { (e.currentTarget).style.boxShadow = '0 6px 24px rgba(255,58,105,0.4)'; (e.currentTarget).style.transform = 'translateY(-1px)'; }}
+        onMouseLeave={e => { (e.currentTarget).style.boxShadow = '0 4px 16px rgba(255,58,105,0.25)'; (e.currentTarget).style.transform = 'translateY(0)'; }}
+      >
+        📞 Book a Call
+      </button>
+
+      {showBookCall && (
+        <BookCallModal
+          lead={lead}
+          onClose={() => setShowBookCall(false)}
         />
       )}
 

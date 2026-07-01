@@ -18,7 +18,7 @@ type NotifCounts = { overdue: number; replied: number; unread: number };
 
 export default function Nav() {
   const pathname = usePathname();
-  const { mode, setMode } = useMode();
+  const { mode } = useMode();
   const { data: session } = useSession();
   const [counts, setCounts] = useState<NotifCounts>({ overdue: 0, replied: 0, unread: 0 });
 
@@ -53,26 +53,6 @@ export default function Nav() {
       <div className="flex items-center gap-2.5 px-4 py-4 border-b" style={{ borderColor: '#1A2235' }}>
         <div className="w-6 h-6 rounded-md flex-shrink-0" style={{ background: '#FF3A69' }} />
         <span className="font-semibold text-sm tracking-tight" style={{ color: '#E2E8F0' }}>Sales Ops</span>
-      </div>
-
-      {/* Mode toggle */}
-      <div className="px-3 pt-3">
-        <div className="flex rounded-lg p-1" style={{ background: '#0F1420' }}>
-          <button onClick={() => setMode("sales")}
-            className="flex-1 py-1 rounded-md text-xs font-semibold transition-colors"
-            style={mode === "sales"
-              ? { background: '#3B82F6', color: 'white' }
-              : { color: '#475569' }}>
-            Sales
-          </button>
-          <button onClick={() => setMode("csm")}
-            className="flex-1 py-1 rounded-md text-xs font-semibold transition-colors"
-            style={mode === "csm"
-              ? { background: '#A78BFA', color: 'white' }
-              : { color: '#475569' }}>
-            CSM
-          </button>
-        </div>
       </div>
 
       {/* Nav links */}
