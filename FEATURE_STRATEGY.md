@@ -69,7 +69,8 @@ Then back it with a **tight scripts vault**: openers + the 4–5 objections you 
 | CSM mode (Servedia) | **Cut** | A whole second app bolted on. Sales-only now — hide it, reclaim the focus. |
 | SMS / SendBlue | **Cut** | Not a channel you use. Dead code + missing keys today anyway. |
 | Round-robin auto-balancing | Defer | Manual assignment is plenty for a small team. |
-| Daily briefing → Slack · nightly scoring | Defer | Scheduled jobs that don't run in prod. Nice-to-have, not core. |
+| Daily briefing → Slack + /summary page | **Removed** | Cut entirely (commit f4b4e54) — Slack cron, `/summary` "Morning Briefing" page, and `/api/ai/summary` all deleted. Not core to the loop. |
+| Nightly scoring | Defer | Scheduled job that doesn't run in prod. Nice-to-have, not core. |
 
 ---
 
