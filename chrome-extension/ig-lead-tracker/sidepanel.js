@@ -114,6 +114,190 @@
     ).join('');
   }
 
+  // ─── Book a Call modal ───────────────────────────────────────────────────
+  const MONTHS_FULL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const DAYS_SHORT = ['Su','Mo','Tu','We','Th','Fr','Sa'];
+  const TIME_SLOTS = [
+    '9:00 AM','9:30 AM','10:00 AM','10:30 AM',
+    '11:00 AM','11:30 AM','12:00 PM','12:30 PM',
+    '1:00 PM','1:30 PM','2:00 PM','2:30 PM',
+    '3:00 PM','3:30 PM','4:00 PM','4:30 PM','5:00 PM',
+  ];
+
+  function showBookModal(lead) {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const maxDate = new Date(today); maxDate.setDate(maxDate.getDate() + 60);
+    let step = 'date';
+    let viewYear = today.getFullYear();
+    let viewMonth = today.getMonth();
+    let selectedDate = null;
+    let selectedTime = null;
+
+    function leadName() {
+      return lead.ig_username ? '@' + lead.ig_username : (lead.name || 'Lead');
+    }
+
+    function formatDate(d) {
+      return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    }
+
+    function stepActive(s) {
+      if (s === 'date') return true;
+      if (s === 'time') return step === 'time' || step === 'confirm';
+      if (s === 'confirm') return step === 'confirm';
+      return false;
+    }
+
+    function buildCalendar() {
+      const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+      const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+      let cells = '';
+      DAYS_SHORT.forEach(d => { cells += `<div class="sp-cal-day-hdr">${d}</div>`; });
+      for (let i = 0; i < firstDay; i++) cells += '<div></div>';
+      for (let day = 1; day <= daysInMonth; day++) {
+        const d = new Date(viewYear, viewMonth, day);
+        const disabled = d < today || d > maxDate;
+        const isToday = d.getTime() === today.getTime();
+        const isSel = selectedDate && d.getTime() === selectedDate.getTime();
+        let cls = 'sp-cal-day';
+        if (disabled) cls += ' disabled';
+        else if (isSel) cls += ' selected';
+        else if (isToday) cls += ' today';
+        cells += `<button class="${cls}" data-day="${day}" ${disabled ? 'disabled' : ''}>${day}</button>`;
+      }
+      return `
+        <div class="sp-cal-nav">
+          <button id="sp-cal-prev">&#8249;</button>
+          <span class="sp-cal-month">${MONTHS_FULL[viewMonth]} ${viewYear}</span>
+          <button id="sp-cal-next">&#8250;</button>
+        </div>
+        <div class="sp-cal-grid">${cells}</div>
+      `;
+    }
+
+    function buildTimeSlots() {
+      return TIME_SLOTS.map(t =>
+        `<button class="sp-slot-btn${selectedTime === t ? ' selected' : ''}" data-time="${t}">${t}</button>`
+      ).join('');
+    }
+
+    function renderModal() {
+      const steps = ['date','time','confirm'];
+      const stepDots = steps.map(s =>
+        `<div class="sp-book-step${stepActive(s) ? ' active' : ''}"></div>`
+      ).join('');
+
+      let body = '';
+      if (step === 'date') {
+        body = buildCalendar();
+      } else if (step === 'time') {
+        body = `
+          <button class="sp-back-btn" id="sp-slot-back">&#8249; ${selectedDate ? formatDate(selectedDate) : ''}</button>
+          <div style="font-size:11px;color:#94A3B8;margin-bottom:10px;">Select a time</div>
+          <div class="sp-slots-grid">${buildTimeSlots()}</div>
+        `;
+      } else if (step === 'confirm') {
+        body = `
+          <button class="sp-back-btn" id="sp-slot-back">&#8249; Change time</button>
+          <div class="sp-confirm-card">
+            <div class="sp-confirm-row">📅 ${selectedDate ? formatDate(selectedDate) : ''}</div>
+            <div class="sp-confirm-row">🕐 ${selectedTime || ''}</div>
+            <div class="sp-confirm-row">with ${leadName()}</div>
+          </div>
+          <p class="sp-confirm-hint">Moves lead to <strong style="color:#22C55E">Booked</strong> and sets the follow-up date.</p>
+          <button class="sp-confirm-btn" id="sp-confirm-book">Confirm Booking</button>
+        `;
+      }
+
+      modal.innerHTML = `
+        <div class="sp-book-header">
+          <div>
+            <div class="sp-book-title">Book a Call</div>
+            <div class="sp-book-subtitle">${leadName()}</div>
+          </div>
+          <button class="sp-book-close" id="sp-book-close-btn">✕</button>
+        </div>
+        <div class="sp-book-steps">${stepDots}</div>
+        <div class="sp-book-body">${body}</div>
+      `;
+      bindModalEvents();
+    }
+
+    function showDone() {
+      modal.innerHTML = `
+        <div class="sp-book-body">
+          <div class="sp-book-done">
+            <div class="sp-book-done-icon">✓</div>
+            <p>Call booked!</p>
+            <span>${selectedDate ? formatDate(selectedDate) : ''} at ${selectedTime || ''}</span>
+          </div>
+        </div>
+      `;
+      setTimeout(() => overlay.remove(), 1800);
+    }
+
+    function bindModalEvents() {
+      document.getElementById('sp-book-close-btn')?.addEventListener('click', () => overlay.remove());
+      document.getElementById('sp-cal-prev')?.addEventListener('click', () => {
+        if (viewMonth === 0) { viewMonth = 11; viewYear--; } else viewMonth--;
+        renderModal();
+      });
+      document.getElementById('sp-cal-next')?.addEventListener('click', () => {
+        if (viewMonth === 11) { viewMonth = 0; viewYear++; } else viewMonth++;
+        renderModal();
+      });
+      modal.querySelectorAll('.sp-cal-day:not(.disabled)').forEach(btn => {
+        btn.addEventListener('click', () => {
+          selectedDate = new Date(viewYear, viewMonth, parseInt(btn.dataset.day));
+          step = 'time';
+          renderModal();
+        });
+      });
+      modal.querySelectorAll('.sp-slot-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          selectedTime = btn.dataset.time;
+          step = 'confirm';
+          renderModal();
+        });
+      });
+      document.getElementById('sp-slot-back')?.addEventListener('click', () => {
+        step = step === 'confirm' ? 'time' : 'date';
+        renderModal();
+      });
+      document.getElementById('sp-confirm-book')?.addEventListener('click', async () => {
+        const confirmBtn = document.getElementById('sp-confirm-book');
+        if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = 'Booking…'; }
+        try {
+          const [timePart, period] = selectedTime.split(' ');
+          let [hours, mins] = timePart.split(':').map(Number);
+          if (period === 'PM' && hours !== 12) hours += 12;
+          if (period === 'AM' && hours === 12) hours = 0;
+          const dt = new Date(selectedDate);
+          dt.setHours(hours, mins, 0, 0);
+          const dashboardUrl = await getDashboardUrl();
+          await fetch(`${dashboardUrl}/api/leads`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: lead.id, stage: 'Booked', follow_up_date: dt.toISOString() }),
+          });
+          showDone();
+          fetchLeads(false);
+        } catch (e) {
+          if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = 'Retry'; }
+        }
+      });
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'sp-book-overlay';
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const modal = document.createElement('div');
+    modal.id = 'sp-book-modal';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    renderModal();
+  }
+
   // ─── Render leads tab ────────────────────────────────────────────────────
   function renderLeads() {
     const query = searchQuery.toLowerCase();
@@ -163,6 +347,7 @@
               </div>
             </div>
             ${dueText ? `<div class="sp-lead-due ${dueCls}">${dueText}</div>` : ''}
+            <button class="sp-book-btn" data-book-id="${lead.id}" title="Book a call">📞</button>
           </div>
         `;
       });
@@ -172,10 +357,21 @@
 
     // Bind click handlers
     content.querySelectorAll('.sp-lead-item').forEach(item => {
-      item.addEventListener('click', async () => {
+      item.addEventListener('click', async (e) => {
+        if (e.target.closest('.sp-book-btn')) return;
         const id = item.dataset.id;
         const dashboardUrl = await getDashboardUrl();
         window.open(`${dashboardUrl}/leads/${id}`, '_blank');
+      });
+    });
+
+    // Bind book-call buttons
+    content.querySelectorAll('.sp-book-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.bookId;
+        const lead = allLeads.find(l => String(l.id) === String(id));
+        if (lead) showBookModal(lead);
       });
     });
   }
