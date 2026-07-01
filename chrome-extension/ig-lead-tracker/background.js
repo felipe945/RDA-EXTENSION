@@ -11,7 +11,7 @@ const DEFAULT_URL = "https://unified-sales-ops.vercel.app";
 // User must create a "Web Application" OAuth 2.0 client in Google Cloud Console
 // and add redirect URI: https://ckiknpaiindhapocfloenompedkgneoa.chromiumapp.org/
 // Replace GCAL_CLIENT_ID below with the client_id from that OAuth client.
-const GCAL_CLIENT_ID = "PASTE_YOUR_WEB_APP_CLIENT_ID_HERE";
+const GCAL_CLIENT_ID = "900158593205-m0opcpaqn5lg8ejr2d9r3cdjfrrg0hdj.apps.googleusercontent.com";
 const GCAL_REDIRECT = "https://ckiknpaiindhapocfloenompedkgneoa.chromiumapp.org/";
 const GCAL_SCOPES = [
   "https://www.googleapis.com/auth/calendar.readonly",
