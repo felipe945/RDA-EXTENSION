@@ -7,7 +7,24 @@ Severity: 🔴 critical (data/security) · 🟠 broken feature · 🟡 known gap
 
 ---
 
-## 🔴 1. API routes are unauthenticated — the whole lead database is publicly readable
+## ✅ 1. API routes are unauthenticated — FIXED 2026-07-01 (commit 57a584e)
+
+**Fix shipped:** `proxy.ts` now matches `/api/:path*` and checks the NextAuth token via `getToken` — unauthenticated `/api` → 401 JSON, unauthenticated page → redirect to /login. Self-authenticating/internal routes stay open (auth, ig-events, sendblue, inngest, batch-enrich, salesforce/batch, ai/research-lead, log).
+
+**Verified in prod after deploy:**
+| Request | Before | After |
+|---------|--------|-------|
+| `GET /api/leads?mode=sales` | 200 | **401** ✅ |
+| `GET /api/notifications` | 200 | **401** ✅ |
+| `GET /api/auth/session` | 200 | 200 ✅ (login intact) |
+| `GET /login` | 200 | 200 ✅ |
+| `GET /` | 307→/login | 307→/login ✅ |
+
+> Still worth doing later: real Postgres RLS (#5) so the DB is protected even if a route guard is ever missed, and an internal secret on `/api/ai/research-lead` to stop UUID-blind cost-abuse. The data-exposure hole itself is closed.
+
+<details><summary>Original finding (for history)</summary>
+
+### API routes are unauthenticated — the whole lead database is publicly readable
 
 The auth wall (`proxy.ts`) only matches **pages**, not API routes. Its matcher is `/`, `/leads`, `/inbox`, `/outreach`, `/summary`, `/scripts`, `/settings` — there is **no `/api/*` entry**.
 
@@ -22,6 +39,8 @@ The auth wall (`proxy.ts`) only matches **pages**, not API routes. Its matcher i
 **Why it's dangerous:** every route uses the Supabase **service-role** key, which bypasses RLS, and there is **no Postgres RLS**. So the only access control is per-route `getServerSession()` — which the core data routes (`/api/leads` GET/POST/PATCH/DELETE, `/api/notifications`, `/api/messages`) **do not have**. Anyone who knows the URL can **read, edit, or delete all 627 leads** via the API. The login page hides the UI, not the data.
 
 **Fix:** add `/api/:path*` to the proxy matcher (excluding `/api/auth` and webhook routes that authenticate by secret, e.g. `/api/ig-events`, `/api/sendblue`), and/or add a shared `requireSession()` guard to the data routes. Then re-run the probe table above and confirm 401s.
+
+</details>
 
 ---
 
@@ -79,7 +98,7 @@ CSV rows carry no bio/follower data, so `scoreLead()` returns ~0 (or 15 if a web
 
 ## Priority order to make it accurate
 
-1. **#1 — lock down `/api/*`** (data is currently public). Code fix, ~30 min.
+1. ~~**#1 — lock down `/api/*`**~~ ✅ **DONE (57a584e), verified in prod.**
 2. **#2 — Inngest keys _or_ bulk-import direct-drain** (jobs + import research). Fixes #4 too.
 3. **#3 — `SENTRY_DSN` first**, then other integration vars as needed.
 4. **#5 — RLS + tests** as a later hardening pass.
