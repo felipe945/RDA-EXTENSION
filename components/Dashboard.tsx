@@ -7,6 +7,7 @@ import { useTeam } from "@/hooks/useTeam";
 import { canSeeAllLeads } from "@/lib/permissions";
 import LeadCard from "@/components/LeadCard";
 import AddLeadModal from "@/components/AddLeadModal";
+import ImportLeadsModal from "@/components/ImportLeadsModal";
 import Link from "next/link";
 import type { Lead } from "@/hooks/useLeads";
 import { LeadCardSkeleton } from "@/components/ui/skeleton";
@@ -129,12 +130,13 @@ function BatchResearchButton({ leads }: { leads: Lead[] }) {
 }
 
 export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
-  const { leads: allLeads, loading } = useLeads(mode);
+  const { leads: allLeads, loading, refresh } = useLeads(mode);
   const { members } = useTeam();
   const { data: session } = useSession();
   const [pipelineFilter, setPipelineFilter] = useState<PipelineFilter>("all");
   const [source, setSource] = useState<SourceTab>("all");
   const [showAddLead, setShowAddLead] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [search, setSearch] = useState("");
   const [scope, setScope] = useState<"mine" | "team">("mine");
 
@@ -417,19 +419,35 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
         )
       )}
 
-      {/* Floating Add Lead button */}
-      <button
-        onClick={() => setShowAddLead(true)}
-        className="fixed bottom-6 right-6 z-40 flex items-center gap-2 px-4 py-2.5 bg-[#FF3A69] hover:bg-[#e03060] text-white font-semibold rounded-full shadow-lg transition-colors text-sm"
-      >
-        <span className="text-lg leading-none">+</span>
-        Add Lead
-      </button>
+      {/* Floating action buttons */}
+      <div className="fixed bottom-6 right-6 z-40 flex items-center gap-2">
+        <button
+          onClick={() => setShowImport(true)}
+          className="flex items-center gap-2 px-4 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 font-semibold rounded-full shadow-lg transition-colors text-sm"
+        >
+          <span className="text-base leading-none">⇪</span>
+          Import
+        </button>
+        <button
+          onClick={() => setShowAddLead(true)}
+          className="flex items-center gap-2 px-4 py-2.5 bg-[#FF3A69] hover:bg-[#e03060] text-white font-semibold rounded-full shadow-lg transition-colors text-sm"
+        >
+          <span className="text-lg leading-none">+</span>
+          Add Lead
+        </button>
+      </div>
 
       {showAddLead && (
         <AddLeadModal
           onClose={() => setShowAddLead(false)}
-          onAdded={() => {}}
+          onAdded={() => refresh()}
+        />
+      )}
+
+      {showImport && (
+        <ImportLeadsModal
+          onClose={() => setShowImport(false)}
+          onImported={() => refresh()}
         />
       )}
     </div>
