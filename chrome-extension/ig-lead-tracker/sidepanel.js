@@ -473,17 +473,7 @@ function getOpener(lead, channel) {
 }
 
 function buildOutreachQueue(channel) {
-  const DONE = ["DM Sent", "Replied", "Qualifying", "Call Offered", "Booked", "Closed", "DQ", "Active", "Churned", "Blocked"];
-  const now = Date.now();
-  return allLeads
-    .filter((l) => !DONE.includes(l.stage))
-    .filter((l) => !snoozedLeads[l.id] || snoozedLeads[l.id] <= now)
-    .filter((l) => {
-      if (channel === "ig") return !!(l.ig_username || l.ig_profile_url);
-      if (channel === "linkedin") return !!l.linkedin_url;
-      return true;
-    })
-    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  return window.FBQueue.buildQueue(allLeads, { channel, snoozed: snoozedLeads });
 }
 
 function showSidepanelSlotPicker(_container, lead, slots, slotMins) {
@@ -777,13 +767,16 @@ function renderOutreach() {
 
   const sentDisabled = false;
 
+  const prog = window.FBQueue.computeBatchProgress(allLeads, { channel: outreachChannel });
+
   list.innerHTML = `
     <div class="queue-progress">
-      <span class="queue-pos">${outreachIdx + 1} / ${queue.length}</span>
+      <span class="queue-pos">Reached out: ${prog.contacted} / ${prog.total} (${prog.pct}%)</span>
       <div class="queue-bar-bg">
-        <div class="queue-bar-fill" style="width:${Math.round((outreachIdx / Math.max(queue.length - 1, 1)) * 100)}%"></div>
+        <div class="queue-bar-fill" style="width:${prog.pct}%"></div>
       </div>
     </div>
+    <div class="queue-cursor">Card ${outreachIdx + 1} of ${queue.length} to do</div>
 
     <div class="outreach-card flashcard">
       ${alreadyUsesBanner}
@@ -966,13 +959,19 @@ function renderOutreach() {
     }
   });
 
-  // Prev / Next
+  // Prev / Next — also drive the IG tab so the auto-sync re-affirms instead of snapping back
   document.getElementById("prevBtn")?.addEventListener("click", () => {
     outreachIdx = Math.max(0, outreachIdx - 1);
+    const prev = queue[outreachIdx];
+    const url = prev && igUrl(prev);
+    if (url && outreachChannel === "ig") openInIgTab(url);
     renderOutreach();
   });
   document.getElementById("nextBtn")?.addEventListener("click", () => {
     outreachIdx = Math.min(queue.length - 1, outreachIdx + 1);
+    const next = queue[outreachIdx];
+    const url = next && igUrl(next);
+    if (url && outreachChannel === "ig") openInIgTab(url);
     renderOutreach();
   });
 

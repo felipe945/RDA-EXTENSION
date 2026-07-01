@@ -43,7 +43,7 @@
   "content_scripts": [
     {
       "matches": ["https://www.instagram.com/*"],
-      "js": ["scripts-data.js", "instagram.js"],
+      "js": ["scripts-data.js", "outreach-queue.js", "instagram.js"],
       "run_at": "document_idle"
     },
     {
