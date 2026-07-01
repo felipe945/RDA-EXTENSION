@@ -7,9 +7,16 @@
 
   const origFetch = window.fetch;
 
+  // Contract A: ig_dm_sent means a real outbound send. IG also POSTs under
+  // /direct_v2/threads/ when a thread is opened or marked seen — only the
+  // broadcast endpoint is an actual send, so anything else must not dispatch.
+  function isDmSendUrl(url) {
+    return /\/direct_v2\/threads\/broadcast\//.test(url);
+  }
+
   window.fetch = function (input, init) {
     const url = typeof input === "string" ? input : (input && input.url) ? input.url : "";
-    const method = ((init && init.method) || "GET").toUpperCase();
+    const method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
 
     if (method === "POST") {
       // Follow / friend request
@@ -34,11 +41,8 @@
           })
         );
       }
-      // DM send detection
-      else if (
-        url.includes("/direct_v2/threads/") ||
-        url.includes("/api/v1/direct/")
-      ) {
+      // DM send detection — broadcast endpoint only (Contract A)
+      else if (isDmSendUrl(url)) {
         document.dispatchEvent(new CustomEvent("ig_dm_sent", { bubbles: true, composed: true }));
       }
     }
@@ -70,6 +74,7 @@
   const origOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
     this._url = url;
+    this._method = (method || "GET").toUpperCase();
     return origOpen.apply(this, [method, url, ...rest]);
   };
   const origSend = XMLHttpRequest.prototype.send;
@@ -92,10 +97,7 @@
           if (username) emitViewer(username);
         }
       } catch {}
-      if (
-        this._url &&
-        (this._url.includes("/direct_v2/threads/") || this._url.includes("/api/v1/direct/"))
-      ) {
+      if (this._url && this._method === "POST" && isDmSendUrl(this._url)) {
         document.dispatchEvent(new CustomEvent("ig_dm_sent", { bubbles: true, composed: true }));
       }
     });

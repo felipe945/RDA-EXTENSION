@@ -269,7 +269,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // Saves which IG account is currently logged in (detected by page-interceptor)
       case "IG_VIEWER": {
         const { handle } = msg;
-        if (handle) await chrome.storage.local.set({ activeIgAccount: handle });
+        // Contract B: every activeIgAccount write carries a freshness timestamp
+        if (handle) await chrome.storage.local.set({ activeIgAccount: handle, activeIgAccountTs: Date.now() });
         sendResponse({ ok: true });
         break;
       }
