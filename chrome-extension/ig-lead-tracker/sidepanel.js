@@ -486,187 +486,180 @@ function buildOutreachQueue(channel) {
     .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 }
 
-function showSidepanelSlotPicker(container, lead, slots, slotMins) {
-  slotMins = slotMins || 45;
-  const existing = document.getElementById("sp-slot-picker");
-  if (existing) existing.remove();
+function showSidepanelSlotPicker(_container, lead, slots, slotMins) {
+  slotMins = slotMins || 30;
+  const leadName = lead?.name || (lead?.ig_username ? `@${lead.ig_username}` : "Lead");
 
-  const picker = document.createElement("div");
-  picker.id = "sp-slot-picker";
-  picker.style.cssText = "margin-top:10px;background:#13131a;border:1px solid #1e1e2a;border-radius:8px;overflow:hidden";
+  // Group slots by date key "YYYY-MM-DD"
+  const slotsByDate = {};
+  slots.forEach(s => {
+    const key = s.start.split("T")[0];
+    if (!slotsByDate[key]) slotsByDate[key] = [];
+    slotsByDate[key].push(s);
+  });
+  const availDates = new Set(Object.keys(slotsByDate));
 
-  const head = document.createElement("div");
-  head.style.cssText = "padding:8px 12px;background:#0e1e38;border-bottom:1px solid #1e1e2a;font-size:10px;font-weight:700;color:#93c5fd;letter-spacing:.04em;display:flex;align-items:center;gap:6px";
-  const spLeadName = lead?.name || (lead?.ig_username ? `@${lead.ig_username}` : "Lead");
-  head.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:#4285F4;display:inline-block"></span> ${slotMins}-min slots for <strong style="color:#e2e8f0">${spLeadName}</strong>`;
-  picker.appendChild(head);
+  const overlay = document.getElementById("sp-book-overlay");
+  const body = document.getElementById("sp-book-body");
+  const titleEl = document.getElementById("sp-book-title");
+  const subtitleEl = document.getElementById("sp-book-subtitle");
+  const stepEls = [
+    document.getElementById("sp-step-1"),
+    document.getElementById("sp-step-2"),
+    document.getElementById("sp-step-3"),
+  ];
 
-  const selected = new Set(slots.slice(0, 3).map(s => s.start));
+  titleEl.textContent = `Book a Call`;
+  subtitleEl.textContent = `${slotMins} min · ${esc(leadName)}`;
+  document.getElementById("sp-book-close").onclick = () => { overlay.style.display = "none"; };
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.style.display = "none"; };
 
-  function fmtSlot(isoStart) {
-    const d = new Date(isoStart);
-    const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const h = d.getHours(); const m = d.getMinutes();
-    const h12 = h % 12 || 12; const ampm = h >= 12 ? "pm" : "am";
-    const minStr = m === 0 ? "" : `:${String(m).padStart(2,"0")}`;
-    return `${days[d.getDay()]} ${months[d.getMonth()]} ${d.getDate()} · ${h12}${minStr}${ampm}`;
+  function setStep(n) {
+    stepEls.forEach((s, i) => s.classList.toggle("active", i < n));
   }
 
-  const listEl = document.createElement("div");
-  listEl.style.cssText = "padding:6px 8px;display:flex;flex-direction:column;gap:3px";
-  slots.forEach(slot => {
-    const row = document.createElement("div");
-    const isSel = selected.has(slot.start);
-    row.style.cssText = `display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:5px;cursor:pointer;background:${isSel ? "#0e1e38" : "transparent"};border:1px solid ${isSel ? "#1d4ed8" : "transparent"}`;
-    row.innerHTML = `
-      <input type="checkbox" ${isSel ? "checked" : ""} style="accent-color:#4285F4;cursor:pointer;flex-shrink:0">
-      <span style="font-size:11px;color:${isSel ? "#ddd" : "#666"};font-variant-numeric:tabular-nums">${fmtSlot(slot.start)}</span>
-    `;
-    const cb = row.querySelector("input");
-    function updateRow() {
-      if (cb.checked) { selected.add(slot.start); row.style.background = "#0e1e38"; row.style.borderColor = "#1d4ed8"; row.querySelector("span").style.color = "#ddd"; }
-      else { selected.delete(slot.start); row.style.background = "transparent"; row.style.borderColor = "transparent"; row.querySelector("span").style.color = "#666"; }
+  function fmtTime(iso) {
+    const d = new Date(iso);
+    const h = d.getHours(), m = d.getMinutes();
+    const h12 = h % 12 || 12;
+    const ampm = h >= 12 ? "PM" : "AM";
+    return `${h12}${m === 0 ? "" : `:${String(m).padStart(2,"0")}`} ${ampm}`;
+  }
+
+  const today = new Date();
+  let viewYear = today.getFullYear(), viewMonth = today.getMonth();
+  const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+  function renderCalendar() {
+    setStep(1);
+    const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+    const todayKey = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
+
+    let html = `
+      <div class="sp-cal-nav">
+        <button id="sp-cal-prev">‹</button>
+        <span class="sp-cal-month">${MONTHS[viewMonth]} ${viewYear}</span>
+        <button id="sp-cal-next">›</button>
+      </div>
+      <div class="sp-cal-grid">
+        ${["S","M","T","W","T","F","S"].map(d => `<div class="sp-cal-day-hdr">${d}</div>`).join("")}
+        ${Array(firstDay).fill("<div></div>").join("")}`;
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const key = `${viewYear}-${String(viewMonth+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+      const isPast = new Date(viewYear, viewMonth, day) < new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const hasSlots = availDates.has(key) && !isPast;
+      const isToday = key === todayKey;
+      const cls = ["sp-cal-day", isToday ? "today" : "", !hasSlots ? "disabled" : ""].filter(Boolean).join(" ");
+      const dot = hasSlots ? `<span style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);width:4px;height:4px;border-radius:50%;background:#FF3A69"></span>` : "";
+      html += `<button class="${cls}" data-key="${key}" style="position:relative" ${!hasSlots ? "disabled" : ""}>${day}${dot}</button>`;
     }
-    cb.addEventListener("change", () => { if (!cb.checked || selected.size <= 3) updateRow(); else cb.checked = false; });
-    row.addEventListener("click", (e) => { if (e.target !== cb) { if (cb.checked) { cb.checked = false; } else if (selected.size < 3) { cb.checked = true; } updateRow(); } });
-    listEl.appendChild(row);
-  });
-  picker.appendChild(listEl);
+    html += `</div>`;
+    body.innerHTML = html;
 
-  const footer = document.createElement("div");
-  footer.style.cssText = "padding:8px;display:flex;gap:6px;border-top:1px solid #1e1e2a";
-  const cancelBtn = document.createElement("button");
-  cancelBtn.textContent = "Cancel";
-  cancelBtn.style.cssText = "flex:1;background:#161616;border:1px solid #252525;border-radius:6px;color:#666;font-size:11px;padding:6px;cursor:pointer";
-  cancelBtn.addEventListener("click", () => picker.remove());
-
-  const copyBtn = document.createElement("button");
-  copyBtn.textContent = "Copy DM text";
-  copyBtn.style.cssText = "flex:2;background:#0f2540;border:1px solid #1d4ed8;border-radius:6px;color:#93c5fd;font-size:11px;font-weight:600;padding:6px;cursor:pointer";
-  copyBtn.addEventListener("click", async () => {
-    const chosen = [...selected];
-    if (!chosen.length) return;
-    function fmtShort(iso) {
-      const dt = new Date(iso);
-      const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-      const h = dt.getHours(); const m = dt.getMinutes();
-      const h12 = h % 12 || 12; const ampm = h >= 12 ? "pm" : "am";
-      const minStr = m === 0 ? "" : `:${String(m).padStart(2,"0")}`;
-      return `${days[dt.getDay()]} at ${h12}${minStr}${ampm}`;
-    }
-    const texts = chosen.map(fmtShort);
-    const slotText = texts.length === 1 ? texts[0] : texts.length === 2 ? `${texts[0]} or ${texts[1]}` : texts.slice(0,-1).join(", ") + ", or " + texts.at(-1);
-    const dmText = `Happy to walk through the dashboard — no pitch, just ${slotMins} min.\n\nI'm open ${slotText} — any of those work?`;
-    await navigator.clipboard.writeText(dmText).catch(() => {});
-    await chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "Call Offered" } }).catch(() => {});
-    copyBtn.textContent = "✓ Copied!";
-    setTimeout(() => { copyBtn.textContent = "Copy times"; copyBtn.disabled = false; }, 1500);
-  });
-
-  const bookEventBtn = document.createElement("button");
-  bookEventBtn.textContent = "📅 Book";
-  bookEventBtn.title = "Create Google Calendar event";
-  bookEventBtn.style.cssText = "flex:1;background:#0d2b18;border:1px solid #166534;border-radius:6px;color:#4ade80;font-size:11px;font-weight:600;padding:6px;cursor:pointer";
-  bookEventBtn.addEventListener("click", () => {
-    const chosen = [...selected];
-    if (!chosen.length) return;
-    footer.style.display = "none";
-
-    const iStyle = "background:#0a1f10;border:1px solid #166534;border-radius:6px;color:#d1fae5;font-size:11px;padding:6px 8px;outline:none;width:100%;box-sizing:border-box";
-    const form = document.createElement("div");
-    form.style.cssText = "display:flex;flex-direction:column;gap:7px;padding:10px 0 4px";
-
-    const emailInput = document.createElement("input");
-    emailInput.type = "email";
-    emailInput.placeholder = "Paste their email…";
-    emailInput.style.cssText = iStyle;
-
-    const nameInput = document.createElement("input");
-    nameInput.type = "text";
-    nameInput.placeholder = "Their name (auto-detected)";
-    nameInput.style.cssText = iStyle;
-    nameInput.value = lead?.name || lead?.ig_username || "";
-
-    emailInput.addEventListener("input", () => {
-      if (!nameInput.dataset.edited) {
-        const local = emailInput.value.split("@")[0];
-        nameInput.value = local.split(/[._-]/).filter(Boolean).map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
-      }
+    document.getElementById("sp-cal-prev").onclick = () => {
+      if (--viewMonth < 0) { viewMonth = 11; viewYear--; }
+      renderCalendar();
+    };
+    document.getElementById("sp-cal-next").onclick = () => {
+      if (++viewMonth > 11) { viewMonth = 0; viewYear++; }
+      renderCalendar();
+    };
+    body.querySelectorAll(".sp-cal-day:not(.disabled)").forEach(btn => {
+      btn.addEventListener("click", () => renderSlots(btn.dataset.key));
     });
-    nameInput.addEventListener("input", () => { nameInput.dataset.edited = "1"; });
+  }
 
-    const slotLabel = document.createElement("div");
-    slotLabel.textContent = "Which time did they confirm?";
-    slotLabel.style.cssText = "color:#86efac;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-top:2px";
+  function renderSlots(dateKey) {
+    setStep(2);
+    const [y, mo, d] = dateKey.split("-").map(Number);
+    const dateObj = new Date(y, mo - 1, d);
+    const daySlots = slotsByDate[dateKey] || [];
 
-    const slotSel = document.createElement("select");
-    slotSel.style.cssText = iStyle + ";cursor:pointer";
-    function fmtShortSel(iso) {
-      const dt = new Date(iso);
-      const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-      const h = dt.getHours(); const m = dt.getMinutes();
-      const h12 = h % 12 || 12; const ampm = h >= 12 ? "pm" : "am";
-      const minStr = m === 0 ? "" : `:${String(m).padStart(2,"0")}`;
-      return `${days[dt.getDay()]} at ${h12}${minStr}${ampm}`;
-    }
-    chosen.forEach((isoStart, i) => {
-      const opt = document.createElement("option");
-      opt.value = i;
-      opt.textContent = fmtShortSel(isoStart);
-      slotSel.appendChild(opt);
+    body.innerHTML = `
+      <button class="sp-back-btn" id="sp-slots-back">‹ Back</button>
+      <div style="font-size:13px;font-weight:700;color:#E2E8F0;margin-bottom:14px">${DAYS[dateObj.getDay()]}, ${MONTHS_SHORT[mo-1]} ${d}</div>
+      <div class="sp-slots-grid">
+        ${daySlots.map((s, i) => `<button class="sp-slot-btn" data-i="${i}">${fmtTime(s.start)}</button>`).join("")}
+      </div>`;
+
+    document.getElementById("sp-slots-back").onclick = renderCalendar;
+    body.querySelectorAll(".sp-slot-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        body.querySelectorAll(".sp-slot-btn").forEach(b => b.classList.remove("selected"));
+        btn.classList.add("selected");
+        setTimeout(() => renderConfirm(daySlots[parseInt(btn.dataset.i)], dateKey), 160);
+      });
     });
+  }
 
-    const formBtns = document.createElement("div");
-    formBtns.style.cssText = "display:flex;gap:6px;margin-top:2px";
+  function renderConfirm(slot, dateKey) {
+    setStep(3);
+    const [y, mo, d] = dateKey.split("-").map(Number);
+    const dateObj = new Date(y, mo - 1, d);
 
-    const cancelForm = document.createElement("button");
-    cancelForm.textContent = "← Back";
-    cancelForm.style.cssText = "flex:0 0 auto;background:transparent;border:1px solid #374151;border-radius:6px;color:#9ca3af;font-size:10px;padding:6px 10px;cursor:pointer";
-    cancelForm.addEventListener("click", () => { form.remove(); footer.style.display = ""; });
+    body.innerHTML = `
+      <div class="sp-confirm-card">
+        <div class="sp-confirm-row"><span>📅</span><span>${DAYS[dateObj.getDay()]}, ${MONTHS_SHORT[mo-1]} ${d}</span></div>
+        <div class="sp-confirm-row"><span>🕐</span><span>${fmtTime(slot.start)} · ${slotMins} min</span></div>
+        <div class="sp-confirm-row"><span>👤</span><span>${esc(leadName)}</span></div>
+      </div>
+      <div style="margin-bottom:12px">
+        <input id="sp-conf-email" type="email" placeholder="Their email (optional — adds them as attendee)"
+          style="width:100%;padding:9px 12px;background:#0F1420;border:1px solid #2A3554;border-radius:8px;color:#CBD5E1;font-size:12px;outline:none;box-sizing:border-box;transition:border-color .15s">
+      </div>
+      <p class="sp-confirm-hint">Creates a Google Calendar event and marks this lead as Booked.</p>
+      <button class="sp-confirm-btn" id="sp-conf-book">Confirm Booking</button>
+      <button class="sp-back-btn" id="sp-conf-back" style="justify-content:center;margin-top:10px">‹ Change time</button>`;
 
-    const createBtn = document.createElement("button");
-    createBtn.textContent = "📅 Create Event";
-    createBtn.style.cssText = "flex:1;background:#0d2b18;border:1px solid #166534;border-radius:6px;color:#4ade80;font-size:11px;font-weight:600;padding:6px;cursor:pointer";
-    createBtn.addEventListener("click", async () => {
-      const idx = parseInt(slotSel.value, 10);
-      const slot = slots.find(s => s.start === chosen[idx]);
-      if (!slot) return;
-      const leadName = nameInput.value.trim() || lead?.name || lead?.ig_username || "Lead";
-      const guestEmail = emailInput.value.trim() || undefined;
-      createBtn.textContent = "Creating…";
-      createBtn.disabled = true;
-      const result = await chrome.runtime.sendMessage({ type: "CREATE_CALENDAR_EVENT", slotStart: slot.start, slotEnd: slot.end, leadName, guestEmail }).catch(() => null);
+    document.getElementById("sp-conf-email").addEventListener("focus", function() { this.style.borderColor = "#3B82F6"; });
+    document.getElementById("sp-conf-email").addEventListener("blur", function() { this.style.borderColor = "#2A3554"; });
+    document.getElementById("sp-conf-back").onclick = () => renderSlots(dateKey);
+
+    document.getElementById("sp-conf-book").addEventListener("click", async () => {
+      const btn = document.getElementById("sp-conf-book");
+      const guestEmail = document.getElementById("sp-conf-email").value.trim() || undefined;
+      btn.textContent = "Booking…";
+      btn.disabled = true;
+      const result = await chrome.runtime.sendMessage({
+        type: "CREATE_CALENDAR_EVENT",
+        slotStart: slot.start, slotEnd: slot.end,
+        leadName: lead?.name || lead?.ig_username || "Lead",
+        guestEmail,
+      }).catch(() => null);
+
       if (result?.ok) {
-        form.innerHTML = "";
-        const ok = document.createElement("div");
-        ok.textContent = "✓ Event created!";
-        ok.style.cssText = "color:#4ade80;font-size:12px;font-weight:600;text-align:center;padding:10px 8px";
-        form.appendChild(ok);
-        setTimeout(async () => { picker.remove(); await loadData(); }, 1400);
+        await chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "Booked" } }).catch(() => {});
+        const [y2, mo2, d2] = dateKey.split("-").map(Number);
+        const d2Obj = new Date(y2, mo2-1, d2);
+        const dmText = `Hey! Just sent a calendar invite for ${DAYS[d2Obj.getDay()]} ${MONTHS_SHORT[mo2-1]} ${d2} at ${fmtTime(slot.start)} — ${slotMins} min, no pressure. Let me know if that time works!`;
+        body.innerHTML = `
+          <div class="sp-book-done">
+            <div class="sp-book-done-icon">✓</div>
+            <p>Call booked!</p>
+            <span>${esc(leadName)} · ${fmtTime(slot.start)}</span>
+            <button id="sp-copy-dm" style="margin-top:8px;padding:8px 18px;background:#1A2235;border:1px solid #2A3554;border-radius:8px;color:#94A3B8;font-size:12px;cursor:pointer;transition:all .15s">Copy DM text</button>
+          </div>`;
+        document.getElementById("sp-copy-dm").addEventListener("click", async function() {
+          await navigator.clipboard.writeText(dmText).catch(() => {});
+          this.textContent = "✓ Copied!";
+          this.style.color = "#4ade80";
+          this.style.borderColor = "#166534";
+        });
+        setTimeout(async () => { overlay.style.display = "none"; await loadData(); }, 3500);
       } else {
-        createBtn.textContent = "✗ Failed — try again";
-        createBtn.style.borderColor = "#7f1d1d";
-        createBtn.style.color = "#ef4444";
-        createBtn.disabled = false;
+        btn.textContent = "✗ Failed — try again";
+        btn.style.background = "rgba(239,68,68,0.12)";
+        btn.disabled = false;
       }
     });
+  }
 
-    formBtns.appendChild(cancelForm);
-    formBtns.appendChild(createBtn);
-    form.appendChild(emailInput);
-    form.appendChild(nameInput);
-    form.appendChild(slotLabel);
-    form.appendChild(slotSel);
-    form.appendChild(formBtns);
-    picker.appendChild(form);
-  });
-
-  footer.appendChild(cancelBtn);
-  footer.appendChild(copyBtn);
-  footer.appendChild(bookEventBtn);
-  picker.appendChild(footer);
-  container.appendChild(picker);
+  renderCalendar();
+  overlay.style.display = "flex";
 }
 
 function renderOutreach() {
