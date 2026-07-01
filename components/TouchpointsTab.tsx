@@ -14,13 +14,15 @@ type Touchpoint = {
 type Channel = { key: string; label: string; icon: string; ring: string };
 
 const CHANNELS: Channel[] = [
-  { key: "ig_dm",    label: "IG DM",    icon: "📷", ring: "border-pink-700 text-pink-300 bg-pink-950/30" },
-  { key: "email",    label: "Email",    icon: "✉",  ring: "border-blue-700 text-blue-300 bg-blue-950/30" },
-  { key: "sms",      label: "SMS",      icon: "💬", ring: "border-green-700 text-green-300 bg-green-950/30" },
-  { key: "linkedin", label: "LinkedIn", icon: "💼", ring: "border-sky-700 text-sky-300 bg-sky-950/30" },
-  { key: "youtube",  label: "YouTube",  icon: "▶",  ring: "border-red-700 text-red-300 bg-red-950/30" },
-  { key: "call",     label: "Call",     icon: "📞", ring: "border-yellow-700 text-yellow-300 bg-yellow-950/30" },
-  { key: "loom",     label: "Loom",     icon: "🎥", ring: "border-purple-700 text-purple-300 bg-purple-950/30" },
+  { key: "ig_dm",       label: "IG DM",       icon: "📷", ring: "border-pink-700 text-pink-300 bg-pink-950/30" },
+  { key: "ig_fanbasis", label: "IG FanBasis",  icon: "📸", ring: "border-pink-700 text-pink-300 bg-pink-950/30" },
+  { key: "ig_personal", label: "IG Personal",  icon: "📷", ring: "border-purple-700 text-purple-300 bg-purple-950/30" },
+  { key: "email",       label: "Email",        icon: "✉",  ring: "border-blue-700 text-blue-300 bg-blue-950/30" },
+  { key: "sms",         label: "SMS",          icon: "💬", ring: "border-green-700 text-green-300 bg-green-950/30" },
+  { key: "linkedin",    label: "LinkedIn",     icon: "💼", ring: "border-sky-700 text-sky-300 bg-sky-950/30" },
+  { key: "youtube",     label: "YouTube",      icon: "▶",  ring: "border-red-700 text-red-300 bg-red-950/30" },
+  { key: "call",        label: "Call",         icon: "📞", ring: "border-yellow-700 text-yellow-300 bg-yellow-950/30" },
+  { key: "loom",        label: "Loom",         icon: "🎥", ring: "border-purple-700 text-purple-300 bg-purple-950/30" },
 ];
 
 const RESULTS = [

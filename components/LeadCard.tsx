@@ -57,7 +57,7 @@ function SfBadge({ status, score }: { status: string; score: number }) {
   );
 }
 
-export default function LeadCard({ lead, urgency }: { lead: Lead; urgency: UrgencyBucket }) {
+export default function LeadCard({ lead, urgency, assigneeName }: { lead: Lead; urgency: UrgencyBucket; assigneeName?: string }) {
   const [expanded, setExpanded] = useState(false);
   const [note, setNote] = useState("");
   const [undoStage, setUndoStage] = useState<{ prev: string; timer: ReturnType<typeof setTimeout> } | null>(null);
@@ -167,6 +167,14 @@ export default function LeadCard({ lead, urgency }: { lead: Lead; urgency: Urgen
           )}
         </div>
         <div className="flex items-center gap-3 shrink-0">
+          {assigneeName && (
+            <span
+              title={`Assigned to ${assigneeName}`}
+              className="flex h-5 w-5 items-center justify-center rounded-full bg-[#1E2640] text-[10px] font-medium text-[#94A3B8]"
+            >
+              {assigneeName.charAt(0).toUpperCase()}
+            </span>
+          )}
           <span className="text-xs text-gray-400">{lead.stage}</span>
           {lead.due_at && (
             <span className={`text-xs ${urgency === "overdue" ? "text-[#d4892a]" : "text-gray-500"}`}>

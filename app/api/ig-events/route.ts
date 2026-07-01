@@ -1,6 +1,20 @@
 import { type NextRequest } from "next/server";
+import { z } from "zod";
 import { supabaseServer } from "@/lib/supabase";
 import { scoreLead } from "@/lib/scoring";
+import { inngest } from "@/lib/inngest";
+
+const igEventSchema = z.object({
+  type: z.string(),
+  username: z.string(),
+  userId: z.string().optional(),
+  pageUrl: z.string().optional(),
+  bio: z.string().optional(),
+  followerCount: z.number().optional(),
+  profileUrl: z.string().optional(),
+  displayName: z.string().optional(),
+  savedFromAccount: z.string().optional(),
+});
 
 export async function POST(req: NextRequest) {
   const secret = req.headers.get("x-ig-secret");
@@ -8,21 +22,16 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await req.json() as Record<string, unknown>;
-  const { type, username, userId, pageUrl, bio, followerCount, profileUrl, displayName } = body as {
-    type?: string;
-    username?: string;
-    userId?: string;
-    pageUrl?: string;
-    bio?: string;
-    followerCount?: number;
-    profileUrl?: string;
-    displayName?: string;
-  };
-
-  if (!type || !username) {
-    return Response.json({ error: "Missing type or username" }, { status: 400 });
+  const rawBody = await req.json();
+  const parsed = igEventSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return Response.json(
+      { error: "Invalid payload", details: parsed.error.flatten() },
+      { status: 400 }
+    );
   }
+  const body = parsed.data;
+  const { type, username, userId, pageUrl, bio, followerCount, profileUrl, displayName } = body;
 
   const db = supabaseServer();
 
@@ -35,7 +44,7 @@ export async function POST(req: NextRequest) {
       .from("leads")
       .select("id, ig_events")
       .eq("ig_username", username)
-      .single();
+      .maybeSingle();
 
     const score = scoreLead({
       bio: bio ?? undefined,
@@ -59,6 +68,8 @@ export async function POST(req: NextRequest) {
           research_status: "pending",
           ig_events: [...igEvents, saveEvent],
           updated_at: now,
+          ig_user_id: userId ?? undefined,
+          source_account: (body.savedFromAccount as string | undefined) ?? undefined,
         })
         .eq("id", leadId);
     } else {
@@ -74,6 +85,8 @@ export async function POST(req: NextRequest) {
           bio: bio ?? null,
           follower_count: followerCount ?? null,
           ig_profile_url: profileUrl ?? null,
+          ig_user_id: userId ?? null,
+          source_account: (body.savedFromAccount as string | undefined) ?? null,
           score,
           research_status: "pending",
           ig_events: [saveEvent],
@@ -81,7 +94,7 @@ export async function POST(req: NextRequest) {
           updated_at: now,
         })
         .select("id")
-        .single();
+        .maybeSingle();
 
       if (insertError || !newLead) {
         return Response.json({ error: "Failed to create lead" }, { status: 500 });
@@ -90,15 +103,24 @@ export async function POST(req: NextRequest) {
       leadId = newLead.id as string;
     }
 
-    // Fire-and-forget research trigger — do NOT await
-    const baseUrl = process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : (process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000");
-    void fetch(`${baseUrl}/api/ai/research-lead`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ leadId }),
-    });
+    // Durable research trigger. Inngest retries transient Anthropic failures with
+    // backoff. But the save itself must NEVER fail because research couldn't be
+    // enqueued — a saved-but-unresearched lead is fine (research_status stays
+    // 'pending' and can be retried), a failed save loses the lead entirely.
+    try {
+      await inngest.send({ name: "lead/research.requested", data: { leadId } });
+    } catch (err) {
+      // Inngest unreachable (keys unset / dev server down). Fall back to the old
+      // fire-and-forget direct call so research still runs pre-Inngest, and log
+      // for Sentry instead of throwing into the save response.
+      console.error("inngest.send failed, falling back to direct research fetch", err);
+      const { getBaseUrl } = await import("@/lib/base-url");
+      fetch(`${getBaseUrl()}/api/ai/research-lead`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId }),
+      }).catch((e) => console.error("fallback research fetch failed", e));
+    }
 
     return Response.json({ ok: true, leadId });
   }
@@ -110,7 +132,7 @@ export async function POST(req: NextRequest) {
     .from("leads")
     .select("id, ig_events, stage")
     .eq("ig_username", username)
-    .single();
+    .maybeSingle();
 
   const event = { type, postUrl: pageUrl ?? null, ts: new Date().toISOString() };
 

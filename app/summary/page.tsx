@@ -26,44 +26,70 @@ function urgencyLabel(lead: Lead): string {
 export default function SummaryPage() {
   const { mode } = useMode();
   const [state, setState] = useState<BriefingState>({ status: "loading" });
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    async function load() {
-      setState({ status: "loading" });
+  async function load(currentMode: string, bustCache = false) {
+    setState({ status: "loading" });
 
-      // Try T3's AI summary endpoint first
-      try {
-        const res = await fetch(`/api/ai/summary?mode=${mode}`, { method: "GET" });
-        if (res.ok) {
-          const data = await res.json() as { content?: string; generatedAt?: string };
-          if (data.content) {
-            setState({ status: "ai", content: data.content, generatedAt: data.generatedAt ?? new Date().toISOString() });
+    const cacheKey = `briefing-${currentMode}-${new Date().toDateString()}`;
+
+    if (!bustCache) {
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached) as { content: string; generatedAt: string; ts: number };
+          if (Date.now() - parsed.ts < 3_600_000) {
+            setState({ status: "ai", content: parsed.content, generatedAt: parsed.generatedAt });
             return;
           }
-        }
-      } catch {
-        // endpoint not built yet — fall through to Supabase fallback
+        } catch {}
       }
-
-      // Fallback: build summary from Supabase lead data
-      const { data, error } = await getSupabase()
-        .from("leads")
-        .select("*")
-        .eq("mode", mode)
-        .not("due_at", "is", null)
-        .order("due_at", { ascending: true })
-        .limit(20);
-
-      if (error) {
-        setState({ status: "error", message: error.message });
-        return;
-      }
-
-      setState({ status: "fallback", leads: (data as Lead[]) ?? [] });
+    } else {
+      sessionStorage.removeItem(cacheKey);
     }
 
-    load();
-  }, [mode]);
+    try {
+      const res = await fetch(`/api/ai/summary?mode=${currentMode}`, { method: "GET" });
+      if (res.ok) {
+        const data = await res.json() as { content?: string; generatedAt?: string };
+        if (data.content) {
+          const entry = {
+            content: data.content,
+            generatedAt: data.generatedAt ?? new Date().toISOString(),
+            ts: Date.now(),
+          };
+          sessionStorage.setItem(cacheKey, JSON.stringify(entry));
+          setState({ status: "ai", content: data.content, generatedAt: entry.generatedAt });
+          return;
+        }
+      }
+    } catch {}
+
+    const { data, error } = await getSupabase()
+      .from("leads")
+      .select("*")
+      .eq("mode", currentMode)
+      .not("due_at", "is", null)
+      .order("due_at", { ascending: true })
+      .limit(20);
+
+    if (error) {
+      setState({ status: "error", message: error.message });
+      return;
+    }
+
+    setState({ status: "fallback", leads: (data as Lead[]) ?? [] });
+  }
+
+  async function refreshBriefing() {
+    setRefreshing(true);
+    await load(mode, true);
+    setRefreshing(false);
+  }
+
+  useEffect(() => {
+    load(mode);
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long",
@@ -93,13 +119,33 @@ export default function SummaryPage() {
 
       {state.status === "ai" && (
         <div className="space-y-4">
-          <div className="text-xs text-gray-600">
-            Generated at {new Date(state.generatedAt).toLocaleTimeString()}
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-600">
+              Generated {new Date(state.generatedAt).toLocaleTimeString()}
+            </span>
+            <button
+              onClick={refreshBriefing}
+              disabled={refreshing}
+              className="text-xs text-gray-500 hover:text-gray-300 border border-gray-800 rounded px-2 py-0.5 disabled:opacity-40 transition-colors"
+            >
+              {refreshing ? "Refreshing..." : "Refresh"}
+            </button>
           </div>
-          <div className="prose prose-invert prose-sm max-w-none">
-            <pre className="text-sm text-gray-200 whitespace-pre-wrap font-sans leading-relaxed bg-gray-900/40 p-4 rounded-lg">
-              {state.content}
-            </pre>
+          <div className="space-y-1">
+            {state.content.split("\n").map((line, i) => {
+              if (!line.trim()) return <div key={i} className="h-2" />;
+              const isHeading = /^\d+\./.test(line) || line.endsWith(":");
+              return (
+                <p
+                  key={i}
+                  className={`text-sm leading-relaxed ${
+                    isHeading ? "font-semibold text-white mt-3" : "text-gray-300"
+                  }`}
+                >
+                  {line}
+                </p>
+              );
+            })}
           </div>
         </div>
       )}
@@ -128,8 +174,8 @@ function FallbackBriefing({ leads, mode }: { leads: Lead[]; mode: "sales" | "csm
 
   return (
     <div className="space-y-6">
-      <div className="text-xs text-amber-600 bg-amber-900/20 border border-amber-800/40 rounded px-3 py-2">
-        AI briefing will appear here once /api/ai/summary is live (T3). Showing live data below.
+      <div className="text-xs text-gray-600 bg-gray-900 border border-gray-800 rounded px-3 py-2">
+        Live data from your leads (AI briefing available when ANTHROPIC_API_KEY is set)
       </div>
 
       <BriefingSection

@@ -1,108 +1,117 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { supabase as getSupabase } from "@/lib/supabase";
-
-export type Lead = {
-  id: string;
-  created_at: string;
-  updated_at: string;
-  name: string | null;
-  ig_username: string | null;
-  ig_profile_url: string | null;
-  linkedin_url: string | null;
-  phone: string | null;
-  email: string | null;
-  stage: string;
-  source: string | null;
-  mode: string;
-  due_at: string | null;
-  last_contact_at: string | null;
-  ig_events: { type: string; postUrl: string | null; ts: string }[];
-  notes: string | null;
-  tags: string[];
-  research_status: "none" | "pending" | "complete" | "error";
-  research_cache: Record<string, unknown>;
-  outreach_log: Record<string, unknown>[] | null;
-  score: number | null;
-};
+import type { Lead } from "@/lib/types";
+// Re-export so consumers can import Lead from either place
+export type { Lead } from "@/lib/types";
 
 function normalizeLead(raw: Record<string, unknown>): Lead {
   return {
     ...raw,
-    research_status: (raw.research_status as Lead["research_status"]) ?? "none",
-    research_cache: (raw.research_cache as Record<string, unknown>) ?? {},
-    ig_events: (raw.ig_events as Lead["ig_events"]) ?? [],
-    tags: (raw.tags as string[]) ?? [],
-    outreach_log: (raw.outreach_log as Record<string, unknown>[] | null) ?? null,
-    score: (raw.score as number | null) ?? null,
+    research_status:     (raw.research_status as Lead["research_status"]) ?? "none",
+    research_cache:      (raw.research_cache as Record<string, unknown>) ?? {},
+    ig_events:           (raw.ig_events as Lead["ig_events"]) ?? [],
+    tags:                (raw.tags as string[]) ?? [],
+    score:               (raw.score as number) ?? 0,
+    follower_count:      (raw.follower_count as number | null) ?? null,
+    bio:                 (raw.bio as string | null) ?? null,
+    sf_account_id:       (raw.sf_account_id as string | null) ?? null,
+    sf_account_name:     (raw.sf_account_name as string | null) ?? null,
+    sf_status:           (raw.sf_status as Lead["sf_status"]) ?? "none",
+    sf_confidence_score: (raw.sf_confidence_score as number) ?? 0,
+    sf_match_reasons:    (raw.sf_match_reasons as string[]) ?? [],
+    sf_last_checked:     (raw.sf_last_checked as string | null) ?? null,
+    outreach_channels:   (raw.outreach_channels as Record<string, unknown>) ?? {},
+    outreach_log:        (raw.outreach_log as Record<string, unknown>[]) ?? [],
+    dm_sent_at:          (raw.dm_sent_at as string | null) ?? null,
+    dq_at:               (raw.dq_at as string | null) ?? null,
+    twitter_username:    (raw.twitter_username as string | null) ?? null,
+    external_url:        (raw.external_url as string | null) ?? null,
+    ig_user_id:          (raw.ig_user_id as string | null) ?? null,
+    assigned_to:         (raw.assigned_to as string | null) ?? null,
+    owner_id:            (raw.owner_id as string | null) ?? null,
+    org_id:              (raw.org_id as string | null) ?? null,
   } as Lead;
 }
 
+// Single lead — uses API route to bypass RLS
 export function useLead(id: string) {
   const [lead, setLead] = useState<Lead | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const db = getSupabase();
+  const load = useCallback(async () => {
+    const res = await fetch(`/api/leads?id=${id}`);
+    if (!res.ok) return;
+    const { leads } = await res.json() as { leads: Record<string, unknown>[] };
+    setLead(leads?.[0] ? normalizeLead(leads[0]) : null);
+    setLoading(false);
+  }, [id]);
 
-    async function load() {
-      const { data } = await db.from("leads").select("*").eq("id", id).single();
-      setLead(data ? normalizeLead(data as Record<string, unknown>) : null);
-      setLoading(false);
-    }
+  useEffect(() => {
     load();
 
+    // Realtime via Supabase for instant research-complete updates
+    const db = getSupabase();
     const channel = db
       .channel(`lead-${id}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "leads", filter: `id=eq.${id}` },
-        (payload) => setLead(normalizeLead(payload.new as Record<string, unknown>))
+        () => load()
       )
       .subscribe();
 
     return () => { db.removeChannel(channel); };
-  }, [id]);
+  }, [id, load]);
 
-  return { lead, loading };
+  return { lead, loading, refresh: load };
 }
 
+// All leads — uses API route to bypass RLS, polls every 30s + debounced realtime trigger
 export function useLeads(mode: "sales" | "csm") {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
-  // loadRef allows calling refresh() from outside without stale closure
-  let loadFn: (() => Promise<void>) | null = null;
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    const db = getSupabase();
-
-    async function load() {
-      const { data } = await db
-        .from("leads")
-        .select("*")
-        .eq("mode", mode)
-        .order("due_at", { ascending: true, nullsFirst: false });
-      setLeads(
-        ((data as Record<string, unknown>[]) ?? []).map(normalizeLead)
-      );
-      setLoading(false);
-    }
-
-    loadFn = load;
-    load();
-
-    const channel = db
-      .channel(`leads-${mode}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, () => load())
-      .subscribe();
-
-    return () => { db.removeChannel(channel); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const load = useCallback(async () => {
+    const res = await fetch(`/api/leads?mode=${mode}`);
+    if (!res.ok) return;
+    const { leads: data } = await res.json() as { leads: Record<string, unknown>[] };
+    setLeads((data ?? []).map(normalizeLead));
+    setLoading(false);
   }, [mode]);
 
-  function refresh() {
-    if (loadFn) loadFn();
-  }
+  const debouncedLoad = useCallback(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => { load(); }, 300);
+  }, [load]);
 
-  return { leads, loading, refresh };
+  useEffect(() => {
+    load();
+
+    // Poll every 30s as fallback for missed realtime events
+    const poll = setInterval(load, 30_000);
+
+    // Realtime — debounced to avoid burst fetches on rapid successive changes
+    const db = getSupabase();
+    const channel = db
+      .channel(`leads-${mode}`)
+      .on(
+        "postgres_changes",
+        // Column-level filter requires REPLICA IDENTITY FULL on the table.
+        // Without it Supabase silently drops all events. Subscribe unfiltered;
+        // the debounce + 30s poll keep fetches affordable.
+        { event: "*", schema: "public", table: "leads" },
+        debouncedLoad
+      )
+      .subscribe();
+
+    return () => {
+      clearInterval(poll);
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      db.removeChannel(channel);
+    };
+  }, [mode, load, debouncedLoad]);
+
+  return { leads, loading, refresh: load };
 }

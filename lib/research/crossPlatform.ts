@@ -75,11 +75,12 @@ export async function googleSearchHandles(
 ): Promise<HandleCandidate[]> {
   const nameQ = fullName ? `"${fullName}"` : `"${username}"`;
 
-  const queries = [
+  // Apify Google Search Scraper requires queries as newline-separated string, not an array
+  const queriesStr = [
     `${nameQ} youtube channel creator -site:instagram.com`,
     `${nameQ} site:linkedin.com/in`,
     `"${username}" (twitter.com OR x.com) -site:instagram.com`,
-  ];
+  ].join("\n");
 
   try {
     const res = await fetch(
@@ -87,7 +88,7 @@ export async function googleSearchHandles(
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ queries, maxPagesPerQuery: 1, resultsPerPage: 5 }),
+        body: JSON.stringify({ queries: queriesStr, maxPagesPerQuery: 1, resultsPerPage: 5 }),
         signal: AbortSignal.timeout(60000),
       }
     );

@@ -1,3 +1,8 @@
 {
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "functions": {
+    "app/api/ai/research-lead/route.ts": { "maxDuration": 120 },
+    "app/api/ai/summary/route.ts": { "maxDuration": 60 },
+    "app/api/leads/batch-enrich/route.ts": { "maxDuration": 300 }
+  }
 }

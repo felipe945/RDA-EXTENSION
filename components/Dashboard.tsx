@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { useSession } from "next-auth/react";
 import { useLeads } from "@/hooks/useLeads";
+import { useTeam } from "@/hooks/useTeam";
+import { canSeeAllLeads } from "@/lib/permissions";
 import LeadCard from "@/components/LeadCard";
 import AddLeadModal from "@/components/AddLeadModal";
 import Link from "next/link";
@@ -126,11 +129,29 @@ function BatchResearchButton({ leads }: { leads: Lead[] }) {
 }
 
 export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
-  const { leads, loading } = useLeads(mode);
+  const { leads: allLeads, loading } = useLeads(mode);
+  const { members } = useTeam();
+  const { data: session } = useSession();
   const [pipelineFilter, setPipelineFilter] = useState<PipelineFilter>("all");
   const [source, setSource] = useState<SourceTab>("all");
   const [showAddLead, setShowAddLead] = useState(false);
   const [search, setSearch] = useState("");
+  const [scope, setScope] = useState<"mine" | "team">("mine");
+
+  // TEAM-T1's lib/auth.ts adds userId/role to the session; until it ships they read as undefined.
+  const userId = session?.userId;
+  // Reps only ever see their own leads — the toggle is owner/admin only.
+  const showTeamToggle = canSeeAllLeads(session?.role);
+
+  const memberName = (id: string | null): string | undefined =>
+    id ? members.find((m) => m.userId === id)?.name : undefined;
+
+  // "Mine" scopes to leads assigned to me. If userId isn't known yet (pre-T1),
+  // don't hide everything — fall back to showing all so the dashboard never goes blank.
+  const leads =
+    scope === "team" || !userId
+      ? allLeads
+      : allLeads.filter((l) => l.assigned_to === userId);
 
   const pendingResearch = leads.filter(
     (l) => l.research_status === "pending" || l.research_status === "none"
@@ -261,6 +282,24 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
         </div>
       )}
 
+      {/* My Leads / Team Leads toggle — owner/admin only */}
+      {showTeamToggle && (
+        <div className="flex rounded-lg border border-[#1A2235] p-0.5 w-fit">
+          <button
+            onClick={() => setScope("mine")}
+            className={`rounded-md px-3 py-1.5 text-xs transition-colors ${scope === "mine" ? "bg-[#1E2640] text-[#E2E8F0]" : "text-[#94A3B8]"}`}
+          >
+            My Leads
+          </button>
+          <button
+            onClick={() => setScope("team")}
+            className={`rounded-md px-3 py-1.5 text-xs transition-colors ${scope === "team" ? "bg-[#1E2640] text-[#E2E8F0]" : "text-[#94A3B8]"}`}
+          >
+            Team Leads
+          </button>
+        </div>
+      )}
+
       {/* Source tabs */}
       <div className="flex items-center gap-1 border-b pb-1 overflow-x-auto" style={{ borderColor: '#1A2235' }}>
         {SOURCE_TABS.map(({ key, label, icon }) => {
@@ -348,7 +387,7 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
           </h2>
           <div className="space-y-2">
             {grouped[b].map((lead) => (
-              <LeadCard key={lead.id} lead={lead} urgency={b} />
+              <LeadCard key={lead.id} lead={lead} urgency={b} assigneeName={memberName(lead.assigned_to)} />
             ))}
           </div>
         </section>

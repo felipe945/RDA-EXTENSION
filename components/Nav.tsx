@@ -4,14 +4,15 @@ import { usePathname } from "next/navigation";
 import { useMode } from "@/components/ModeProvider";
 import { useSession, signIn, signOut } from "next-auth/react";
 import { useEffect, useState } from "react";
-import { LayoutGrid, Send, MessageSquare, BookOpen, Sun } from "lucide-react";
+import { LayoutGrid, Send, MessageSquare, BookOpen, Sun, Users } from "lucide-react";
 
 const NAV_LINKS = [
-  { href: "/",         label: "Dashboard", icon: LayoutGrid },
-  { href: "/outreach", label: "Outreach",  icon: Send },
-  { href: "/inbox",    label: "Inbox",     icon: MessageSquare },
-  { href: "/scripts",  label: "Scripts",   icon: BookOpen },
-  { href: "/summary",  label: "Briefing",  icon: Sun },
+  { href: "/",              label: "Dashboard", icon: LayoutGrid },
+  { href: "/outreach",      label: "Outreach",  icon: Send },
+  { href: "/inbox",         label: "Inbox",     icon: MessageSquare },
+  { href: "/scripts",       label: "Scripts",   icon: BookOpen },
+  { href: "/summary",       label: "Briefing",  icon: Sun },
+  { href: "/settings/team", label: "Team",      icon: Users },
 ];
 
 type NotifCounts = { overdue: number; replied: number; unread: number };
@@ -44,6 +45,9 @@ export default function Nav() {
   }, [mode]);
 
   const urgentCount = counts.overdue + counts.replied;
+
+  // The sign-in screen is full-bleed — don't render the app chrome there.
+  if (pathname === "/login") return null;
 
   return (
     <aside className="w-56 shrink-0 flex flex-col min-h-screen sticky top-0 h-screen overflow-y-auto"
@@ -83,8 +87,22 @@ export default function Nav() {
         })}
       </nav>
 
-      {/* Gmail status + sign out at bottom */}
+      {/* Account + Gmail status + sign out at bottom */}
       <div className="px-3 py-3 border-t space-y-2" style={{ borderColor: '#1A2235' }}>
+        {session?.user?.email && (
+          <div className="flex items-center justify-between px-3 py-1.5 text-xs" style={{ color: '#94A3B8' }}>
+            <span className="truncate" title={session.user.email}>{session.user.email}</span>
+            <button
+              onClick={() => signOut({ callbackUrl: "/login" })}
+              className="ml-2 shrink-0 transition-colors"
+              style={{ color: '#2D3A52' }}
+              onMouseEnter={e => { (e.currentTarget).style.color = '#E2E8F0'; }}
+              onMouseLeave={e => { (e.currentTarget).style.color = '#2D3A52'; }}
+            >
+              Sign out
+            </button>
+          </div>
+        )}
         {session?.access_token ? (
           <div className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ background: '#0F1420' }}>
             <span className="text-xs font-medium" style={{ color: '#22C55E' }}>Gmail ✓</span>

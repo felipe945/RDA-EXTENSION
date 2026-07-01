@@ -1,6 +1,8 @@
 import { type NextRequest } from "next/server";
 import { supabaseServer } from "@/lib/supabase";
 import { scoreLead } from "@/lib/scoring";
+import { applyLeadPatch } from "@/lib/leads-update";
+import { getSupabaseErrorMessage } from "@/lib/supabaseError";
 
 // GET /api/leads?mode=sales|csm&stage=X&bucket=overdue|today|upcoming|booked|archived
 export async function GET(request: NextRequest) {
@@ -11,14 +13,23 @@ export async function GET(request: NextRequest) {
   const stage = searchParams.get("stage");
   const bucket = searchParams.get("bucket");
 
+  const igUsername = searchParams.get("ig_username");
+  const id = searchParams.get("id");
+
   let query = db.from("leads").select("*").order("due_at", { ascending: true });
 
-  if (mode) {
-    query = query.eq("mode", mode);
-  }
+  const searchQuery = searchParams.get("search");
 
-  if (stage) {
-    query = query.eq("stage", stage);
+  if (id) {
+    query = query.eq("id", id);
+  } else {
+    if (mode) query = query.eq("mode", mode);
+    if (stage) query = query.eq("stage", stage);
+    if (igUsername) query = query.eq("ig_username", igUsername);
+    if (searchQuery && searchQuery.trim()) {
+      const q = `%${searchQuery.trim().toLowerCase()}%`;
+      query = query.or(`ig_username.ilike.${q},name.ilike.${q},email.ilike.${q},phone.ilike.${q}`);
+    }
   }
 
   if (bucket) {
@@ -49,7 +60,7 @@ export async function GET(request: NextRequest) {
   const { data, error } = await query;
 
   if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+    return Response.json({ error: getSupabaseErrorMessage(error) }, { status: 500 });
   }
 
   return Response.json({ leads: data });
@@ -78,10 +89,10 @@ export async function POST(request: NextRequest) {
     .from("leads")
     .insert({ ...body, score, updated_at: new Date().toISOString() })
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+    return Response.json({ error: getSupabaseErrorMessage(error) }, { status: 500 });
   }
 
   return Response.json({ lead: data }, { status: 201 });
@@ -104,31 +115,10 @@ export async function PATCH(request: NextRequest) {
     return Response.json({ error: "Missing id" }, { status: 400 });
   }
 
-  // Fetch current lead to merge scoring inputs
-  const { data: current } = await db
-    .from("leads")
-    .select("bio, follower_count, ig_profile_url, research_cache")
-    .eq("id", id)
-    .single();
-
-  const merged = { ...(current ?? {}), ...fields };
-
-  const score = scoreLead({
-    bio: merged.bio as string | undefined,
-    followerCount: merged.follower_count as number | undefined,
-    externalUrl: merged.ig_profile_url as string | undefined,
-    researchCache: merged.research_cache as Record<string, unknown> | undefined,
-  });
-
-  const { data, error } = await db
-    .from("leads")
-    .update({ ...fields, score, updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .select()
-    .single();
+  const { data, error } = await applyLeadPatch(db, id, fields);
 
   if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+    return Response.json({ error: getSupabaseErrorMessage(error) }, { status: 500 });
   }
 
   return Response.json({ lead: data });
@@ -146,7 +136,7 @@ export async function DELETE(request: NextRequest) {
   const { error } = await db.from("leads").delete().eq("id", id);
 
   if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+    return Response.json({ error: getSupabaseErrorMessage(error) }, { status: 500 });
   }
 
   return Response.json({ ok: true });

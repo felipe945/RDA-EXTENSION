@@ -8,7 +8,7 @@ import { useMode } from "@/components/ModeProvider";
 type Message = {
   id: string;
   created_at: string;
-  lead_id: string;
+  lead_id: string | null;
   channel: "ig" | "sms" | "email" | "linkedin";
   direction: "inbound" | "outbound";
   body: string;
@@ -44,18 +44,25 @@ export default function InboxPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "unread">("unread");
+  const [direction, setDirection] = useState<"inbound" | "outbound" | "all">("inbound");
 
   useEffect(() => {
     const db = getSupabase();
 
     async function load() {
       // messages table is created by T1 — degrade gracefully if it doesn't exist
-      const { data, error } = await db
+      let query = db
         .from("messages")
-        .select("*, leads(name, ig_username)")
-        .eq("direction", "inbound")
+        .select("*, leads!inner(id, name, ig_username, mode)")
+        .eq("leads.mode", mode)
         .order("created_at", { ascending: false })
         .limit(100);
+
+      if (direction !== "all") {
+        query = query.eq("direction", direction);
+      }
+
+      const { data, error } = await query;
 
       if (error) {
         setMessages([]);
@@ -75,18 +82,25 @@ export default function InboxPage() {
     load();
 
     const channel = db
-      .channel(`inbox-${mode}`)
+      .channel(`inbox-${mode}-${direction}`)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, () =>
         load()
       )
       .subscribe();
 
     return () => { db.removeChannel(channel); };
-  }, [mode]);
+  }, [mode, direction]);
 
   async function markRead(id: string) {
     await getSupabase().from("messages").update({ read: true }).eq("id", id);
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: true } : m)));
+  }
+
+  async function markAllRead() {
+    const unreadIds = messages.filter((m) => !m.read).map((m) => m.id);
+    if (!unreadIds.length) return;
+    await getSupabase().from("messages").update({ read: true }).in("id", unreadIds);
+    setMessages((prev) => prev.map((m) => ({ ...m, read: true })));
   }
 
   const visible = filter === "unread" ? messages.filter((m) => !m.read) : messages;
@@ -94,7 +108,7 @@ export default function InboxPage() {
 
   return (
     <div className="max-w-2xl mx-auto space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-base font-semibold">
           Inbox
           {unreadCount > 0 && (
@@ -103,18 +117,41 @@ export default function InboxPage() {
             </span>
           )}
         </h1>
-        <div className="flex gap-1">
-          {(["unread", "all"] as const).map((f) => (
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex gap-1">
+            {(["inbound", "outbound", "all"] as const).map((d) => (
+              <button
+                key={d}
+                onClick={() => setDirection(d)}
+                className={`px-3 py-1 rounded-md text-xs transition-colors ${
+                  direction === d ? "bg-gray-700 text-white" : "text-gray-500 hover:text-gray-300"
+                }`}
+              >
+                {d === "inbound" ? "Received" : d === "outbound" ? "Sent" : "All"}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-1">
+            {(["unread", "all"] as const).map((f) => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`px-3 py-1 rounded-md text-xs transition-colors ${
+                  filter === f ? "bg-gray-700 text-white" : "text-gray-500 hover:text-gray-300"
+                }`}
+              >
+                {f === "unread" ? "Unread" : "All"}
+              </button>
+            ))}
+          </div>
+          {unreadCount > 0 && (
             <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`px-3 py-1 rounded-md text-xs transition-colors ${
-                filter === f ? "bg-gray-700 text-white" : "text-gray-500 hover:text-gray-300"
-              }`}
+              onClick={markAllRead}
+              className="text-xs text-gray-500 hover:text-gray-300 border border-gray-800 rounded px-2 py-1 transition-colors"
             >
-              {f === "unread" ? "Unread" : "All"}
+              Mark all read ({unreadCount})
             </button>
-          ))}
+          )}
         </div>
       </div>
 
@@ -150,12 +187,16 @@ export default function InboxPage() {
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 min-w-0">
-                  <Link
-                    href={`/leads/${msg.lead_id}`}
-                    className="text-sm font-medium hover:text-blue-400 truncate"
-                  >
-                    {sender}
-                  </Link>
+                  {msg.lead_id ? (
+                    <Link
+                      href={`/leads/${msg.lead_id}`}
+                      className="text-sm font-medium hover:text-blue-400 truncate"
+                    >
+                      {sender}
+                    </Link>
+                  ) : (
+                    <span className="text-sm font-medium text-gray-400 truncate">{sender}</span>
+                  )}
                   <span
                     className={`text-xs px-1.5 py-0.5 rounded border ${
                       CHANNEL_COLORS[msg.channel] ?? "text-gray-400 bg-gray-800 border-gray-700"
@@ -177,12 +218,14 @@ export default function InboxPage() {
                 </div>
               </div>
               <p className="text-sm text-gray-300 leading-relaxed line-clamp-3">{msg.body}</p>
-              <Link
-                href={`/leads/${msg.lead_id}`}
-                className="text-xs text-blue-500 hover:underline"
-              >
-                View lead →
-              </Link>
+              {msg.lead_id && (
+                <Link
+                  href={`/leads/${msg.lead_id}`}
+                  className="text-xs text-blue-500 hover:underline"
+                >
+                  View lead →
+                </Link>
+              )}
             </div>
           );
         })}

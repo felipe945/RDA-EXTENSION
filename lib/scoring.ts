@@ -9,6 +9,7 @@ const ECOMMERCE_KEYWORDS = [
 ];
 
 interface ResearchCache {
+  fitScore?: number;
   estimatedGmv?: number;
   stackDetected?: unknown;
   alreadyCustomer?: boolean;
@@ -23,6 +24,11 @@ interface ScoringInput {
 }
 
 export function scoreLead(profile: ScoringInput): number {
+  // AI research score is the source of truth — don't overwrite with heuristic
+  const cache = (profile.researchCache ?? {}) as ResearchCache;
+  const aiFitScore = typeof cache.fitScore === "number" ? cache.fitScore : null;
+  if (aiFitScore !== null) return aiFitScore;
+
   let score = 0;
 
   // Follower count scoring
@@ -48,8 +54,6 @@ export function scoreLead(profile: ScoringInput): number {
   }
 
   // Research cache scoring
-  const cache = (profile.researchCache ?? {}) as ResearchCache;
-
   const gmv = cache.estimatedGmv;
   if (typeof gmv === "number") {
     if (gmv >= 10_000) {

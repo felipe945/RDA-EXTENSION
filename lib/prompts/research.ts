@@ -77,7 +77,11 @@ PERSONA SEGMENTS — pick the single best match:
 - "other" — doesn't fit neatly above
 
 OPENER RULES — each opener must feel human and conversational, not like a sales pitch:
-- IG DM: max 180 chars, casual tone, reference something specific from their bio/niche, mutual connect angle where possible
+- IG DM: follow the EXACT 3-part structure below. Max ~250 chars total.
+  PART 1 — INTRO + PERSONALIZATION: "Hey [FirstName] — on the partnerships team at FanBasis." + one specific hook about their actual offer/niche/situation (not generic). Use real details from the bio.
+  PART 2 — VALUE: Explain what FanBasis does in 1-2 lines. Always name FanBasis. Cover 2 of: lower fees, BNPL at checkout, lead qualifier. Choose based on their persona (high-ticket coach → qualifier + BNPL; ecom → fees + BNPL; course creator → fees + BNPL lift).
+  PART 3 — CTA: One low-commitment ask. "Happy to show you what this looks like with your numbers — do you have 45 min this week?" or similar. Never say "hop on a call."
+  Tone: warm, direct, peer-to-peer. Never say "love your content" or "amazing work." No condescension.
 - Email: subject line under 50 chars, body under 100 words, specific hook in first sentence
 - LinkedIn: professional but not stiff, reference their business specifically, under 150 chars
 - SMS: ultra short, under 80 chars, feels like a text from someone they know
@@ -163,7 +167,7 @@ Return this exact JSON shape:
     "email": "<likely email pattern e.g. hello@theirdomain.com if domain is known, else null>"
   },
   "openers": {
-    "ig": "<personalized IG DM opener, max 180 chars, casual, specific to their niche, mutual connect angle>",
+    "ig": "<IG DM following 3-part structure: (1) 'Hey [FirstName] — on the partnerships team at FanBasis.' + specific hook about their offer/niche, (2) what FanBasis does: lower fees + BNPL + qualifier, tailored to persona, (3) low-commitment CTA. Max 250 chars total. No generic phrases.>",
     "email": {
       "subject": "<email subject line, under 50 chars, specific hook>",
       "body": "<email body, under 100 words, first sentence hooks on something specific about them, ends with a clear single question>"
@@ -179,3 +183,46 @@ Be specific. Use real details from the bio. Do not pad or hedge.`;
 
   return { system, user };
 }
+
+// JSON Schema for Claude tool_use — guarantees structured output with no parsing needed
+export const RESEARCH_TOOL_SCHEMA = {
+  type: "object" as const,
+  required: ["estimatedGmv", "fitScore", "fitReason", "stackDetected", "summary", "persona", "inferredHandles", "openers", "suggestedOpener", "alreadyCustomer"],
+  properties: {
+    estimatedGmv:   { type: "number",  description: "Estimated monthly USD revenue, 0 if no signals" },
+    fitScore:       { type: "number",  description: "0-100 fit score per scoring rules" },
+    fitReason:      { type: "string",  description: "1-2 sentences explaining the score with specific signals" },
+    stackDetected:  { type: "array",   items: { type: "string" }, description: "Platform names from bio/URL" },
+    summary:        { type: "string",  description: "2-3 sentence sales brief" },
+    persona:        { type: "string",  description: "Single best-match persona segment" },
+    inferredHandles: {
+      type: "object",
+      properties: {
+        youtube: { type: ["string", "null"] },
+        twitter: { type: ["string", "null"] },
+        website: { type: ["string", "null"] },
+        email:   { type: ["string", "null"] },
+      },
+      required: ["youtube", "twitter", "website", "email"],
+    },
+    openers: {
+      type: "object",
+      properties: {
+        ig:       { type: "string" },
+        linkedin: { type: "string" },
+        sms:      { type: "string" },
+        email: {
+          type: "object",
+          properties: {
+            subject: { type: "string" },
+            body:    { type: "string" },
+          },
+          required: ["subject", "body"],
+        },
+      },
+      required: ["ig", "email", "linkedin", "sms"],
+    },
+    suggestedOpener: { type: "string", description: "Same as openers.ig — backward compat" },
+    alreadyCustomer: { type: "boolean" },
+  },
+};

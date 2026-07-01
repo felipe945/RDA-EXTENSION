@@ -4,6 +4,8 @@ import { useState } from "react";
 import { supabase as getSupabase } from "@/lib/supabase";
 import type { Lead } from "@/hooks/useLeads";
 import { useAutoSave } from "@/hooks/useAutoSave";
+import { useTeam } from "@/hooks/useTeam";
+import { useToast } from "@/components/ui/toast";
 import ScriptsVault from "@/components/ScriptsVault";
 import ComposeEmail from "@/components/ComposeEmail";
 import ComposeSMS from "@/components/ComposeSMS";
@@ -43,8 +45,47 @@ function OverviewTab({ lead }: { lead: Lead }) {
   const isSales = SALES_STAGES.includes(lead.stage);
   const stages = isSales ? SALES_STAGES : CSM_STAGES;
   const db = getSupabase();
+  const { members } = useTeam();
+  const toast = useToast();
   const [notesValue, setNotesValue] = useState(lead.notes ?? "");
   const [showBookCall, setShowBookCall] = useState(false);
+  const [assigning, setAssigning] = useState(false);
+
+  const currentAssignee = lead.assigned_to ?? "";
+
+  // PATCH /api/leads/[id] is TEAM-T1's assignment entrypoint — it writes assignment_log
+  // before updating. Realtime on the leads table refreshes this panel's `lead` prop.
+  async function handleAssign(userId: string) {
+    await fetch(`/api/leads/${lead.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assigned_to: userId || null }),
+    });
+  }
+
+  // assign-next already persists the pick + logs it server-side, so we don't re-PATCH here —
+  // realtime reflects the change. It 409s when every rep is at capacity.
+  async function handleAutoAssign() {
+    setAssigning(true);
+    try {
+      const res = await fetch("/api/leads/assign-next", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: lead.id }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; assignedTo?: string; error?: string };
+      if (res.ok && data.ok) {
+        const name = members.find((m) => m.userId === data.assignedTo)?.name;
+        toast.success(name ? `Assigned to ${name}` : "Auto-assigned");
+      } else {
+        toast.error(data.error ?? "Couldn't auto-assign");
+      }
+    } catch {
+      toast.error("Couldn't auto-assign");
+    } finally {
+      setAssigning(false);
+    }
+  }
 
   async function updateField(field: string, value: string) {
     await db
@@ -68,6 +109,30 @@ function OverviewTab({ lead }: { lead: Lead }) {
 
   return (
     <div className="space-y-5">
+      {/* Assignment */}
+      <div>
+        <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">Assigned to</p>
+        <div className="flex items-center gap-2">
+          <select
+            value={currentAssignee}
+            onChange={(e) => handleAssign(e.target.value)}
+            className="rounded-lg border border-[#1A2235] bg-[#0F1420] px-2 py-1 text-xs text-[#E2E8F0] outline-none"
+          >
+            <option value="">Unassigned</option>
+            {members.map((m) => (
+              <option key={m.userId} value={m.userId}>{m.name}</option>
+            ))}
+          </select>
+          <button
+            onClick={handleAutoAssign}
+            disabled={assigning}
+            className="text-xs text-[#94A3B8] underline hover:text-[#E2E8F0] disabled:opacity-50"
+          >
+            {assigning ? "Assigning…" : "Auto-assign"}
+          </button>
+        </div>
+      </div>
+
       {/* Stage selector */}
       <div>
         <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">Stage</p>

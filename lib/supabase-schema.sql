@@ -77,3 +77,22 @@ create index if not exists messages_created_at on messages(created_at desc);
 create index if not exists messages_direction_channel on messages(direction, channel);
 
 alter publication supabase_realtime add table messages;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration: Salesforce cross-reference, outreach tracking, action timestamps
+-- Run in Supabase SQL editor — all columns are idempotent (IF NOT EXISTS)
+-- ─────────────────────────────────────────────────────────────────────────────
+alter table leads
+  -- Salesforce
+  add column if not exists sf_account_id       text,
+  add column if not exists sf_account_name     text,
+  add column if not exists sf_status           text default 'none',
+  add column if not exists sf_confidence_score integer default 0,
+  add column if not exists sf_match_reasons    text[] default '{}',
+  add column if not exists sf_last_checked     timestamptz,
+  -- Outreach tracking (channel-level DM log, touch history)
+  add column if not exists outreach_channels   jsonb default '{}',
+  add column if not exists outreach_log        jsonb default '[]',
+  -- Action timestamps (set by extension when user takes action in Outreach tab)
+  add column if not exists dm_sent_at          timestamptz,
+  add column if not exists dq_at               timestamptz;

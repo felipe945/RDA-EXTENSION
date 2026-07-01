@@ -38,7 +38,13 @@ export default function LeadPage({ params }: { params: Promise<{ id: string }> }
       {/* Header */}
       <div className="flex items-center gap-3">
         <button
-          onClick={() => router.back()}
+          onClick={() => {
+            if (window.history.length > 1) {
+              router.back();
+            } else {
+              router.push("/");
+            }
+          }}
           className="text-gray-500 hover:text-gray-300 text-sm shrink-0 transition-colors"
           aria-label="Go back"
         >
