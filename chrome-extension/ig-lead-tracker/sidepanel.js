@@ -894,8 +894,19 @@ function renderOutreach() {
     btn.textContent = "Saving…";
     btn.disabled = true;
     const due = new Date(Date.now() + 3 * 24 * 3600000).toISOString();
-    const chKey = outreachChannel === "linkedin" ? "linkedin" : "ig_fanbasis";
-    const chUpdate = { [chKey]: { sent: true, sentAt: Date.now() } };
+    // Record the account(s) actually used — the toggled touch chips — never a
+    // hardcoded ig_fanbasis. No chip marked → neutral "ig".
+    const stamp = { sent: true, sentAt: Date.now() };
+    let chUpdate;
+    if (outreachChannel === "linkedin") {
+      chUpdate = { linkedin: stamp };
+    } else {
+      const chipsDone = getChannelDone(lead.id);
+      chUpdate = {};
+      if (chipsDone.fb) chUpdate.ig_fanbasis = stamp;
+      if (chipsDone.pers) chUpdate.ig_personal = stamp;
+      if (!chipsDone.fb && !chipsDone.pers) chUpdate.ig = stamp;
+    }
     const result = await chrome.runtime.sendMessage({
       type: "UPDATE_LEAD",
       id: btn.dataset.id,

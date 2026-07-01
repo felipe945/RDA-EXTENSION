@@ -89,7 +89,7 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
         body: JSON.stringify({
           id: lead.id,
           stage: "Booked",
-          follow_up_date: dt.toISOString(),
+          due_at: dt.toISOString(),
         }),
       });
 

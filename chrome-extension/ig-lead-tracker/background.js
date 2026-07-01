@@ -298,7 +298,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // LinkedIn / Twitter content scripts fire this when they detect a reply
       case "CROSS_PLATFORM_REPLY": {
         const { platform, detectedName, messagePreview } = msg;
-        const nameLower = (detectedName ?? "").toLowerCase().trim();
+        const nameLower = (detectedName ?? "").toLowerCase().trim().replace(/\s+/g, " ");
 
         // Guard: refuse to match if name is too short — would match almost anything
         if (!nameLower || nameLower.length < 3) {
@@ -306,19 +306,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           break;
         }
 
-        // Match by name against cached leads
-        const matched = cache.leads.find((l) => {
-          const lName = (l.name ?? "").toLowerCase();
+        // Strict matches only: exact handle, exact LinkedIn /in/ slug, or
+        // full-name equality. Substring/first-name matching flipped unrelated
+        // leads to Replied, so anything ambiguous records nothing.
+        const handleName = nameLower.replace(/^@/, "");
+        const linkedinSlug = nameLower.replace(/ /g, "-");
+        const candidates = cache.leads.filter((l) => {
+          const lName = (l.name ?? "").toLowerCase().trim().replace(/\s+/g, " ");
           const lHandle = (l.ig_username ?? "").toLowerCase();
-          const lLinkedin = (l.linkedin_url ?? "").toLowerCase();
-          const firstName = lName.split(" ")[0];
-          return (
-            lName.includes(nameLower) ||
-            (firstName.length >= 4 && nameLower.includes(firstName)) ||
-            lHandle === nameLower.replace("@", "") ||
-            (platform === "linkedin" && lLinkedin.includes(nameLower.replace(/ /g, "-")))
-          );
+          const slugMatch = platform === "linkedin" &&
+            ((l.linkedin_url ?? "").toLowerCase().match(/\/in\/([^/?#]+)/) || [])[1] === linkedinSlug;
+          return (lHandle && lHandle === handleName) || slugMatch || (lName && lName === nameLower);
         });
+        const matched = candidates.length === 1 ? candidates[0] : null;
 
         if (matched) {
           const now = new Date().toISOString();
