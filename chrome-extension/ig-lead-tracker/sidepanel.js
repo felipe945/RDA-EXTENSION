@@ -9,6 +9,11 @@ let overdueLeads = [];
 let activeFilter = "all";
 let activeTab = "notifs";
 let dashboardUrl = DEFAULT_URL;
+let repToken = "";
+
+function repAuthHeader() {
+  return repToken ? { Authorization: `Bearer ${repToken}` } : {};
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -842,7 +847,7 @@ function renderOutreach() {
       generateAiBtn.textContent = "Generating…";
       generateAiBtn.disabled = true;
       try {
-        const res = await fetch(`${dashboardUrl}/api/ai/research-lead`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leadId: lead.id }) });
+        const res = await fetch(`${dashboardUrl}/api/ai/research-lead`, { method: "POST", headers: { "Content-Type": "application/json", ...repAuthHeader() }, body: JSON.stringify({ leadId: lead.id }) });
         if (!res.ok) throw new Error("research-lead failed");
         await chrome.runtime.sendMessage({ type: "REFRESH_CACHE" });
         await loadData();
@@ -944,9 +949,17 @@ function renderOutreach() {
     }, 4000);
   });
 
-  // Book a Call — use Google Calendar slots if connected, else open calendar URL
+  // Book a Call — server-side slots via the dashboard; else open calendar URL
   document.getElementById("bookCalBtn")?.addEventListener("click", async () => {
     const btn = document.getElementById("bookCalBtn");
+    if (btn.dataset.connect) {
+      // Second click after "Connect calendar" — re-sign-in upgrades the Google scope
+      delete btn.dataset.connect;
+      btn.textContent = "📅 Book a Call";
+      await chrome.runtime.sendMessage({ type: "SIGN_IN" }).catch(() => {});
+      await loadData();
+      return;
+    }
     btn.textContent = "Checking…";
     btn.disabled = true;
     const slotResult = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS" }).catch(() => null);
@@ -957,6 +970,9 @@ function renderOutreach() {
       // Show inline slot picker in the sidepanel outreach card
       const outreachCard = btn.closest(".outreach-card") || btn.parentElement;
       showSidepanelSlotPicker(outreachCard, lead, slotResult.slots, slotResult.slotMins);
+    } else if (slotResult?.needsCalendar || slotResult?.needsSignIn) {
+      btn.dataset.connect = "1";
+      btn.textContent = "🔗 Connect calendar";
     } else {
       // Fallback: open calendar URL if configured — only advance stage if something actually opened
       if (calendarUrl) {
@@ -1054,7 +1070,7 @@ document.getElementById("trackBtn").addEventListener("click", async () => {
 
   await fetch(`${dashboardUrl}/api/leads`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...repAuthHeader() },
     body: JSON.stringify({
       name: raw.replace("@", ""),
       ig_username: igUsername || undefined,
@@ -1075,13 +1091,14 @@ document.getElementById("trackBtn").addEventListener("click", async () => {
 async function loadData() {
   document.getElementById("syncDot").className = "sync-dot syncing";
 
-  const { dashboardUrl: url, fanbasisHandle: fbHandle = "", personalIgUsername: persHandle = "", calendarUrl: calUrl = "" } = await new Promise((r) =>
-    chrome.storage.sync.get({ dashboardUrl: DEFAULT_URL, fanbasisHandle: "", personalIgUsername: "", calendarUrl: "" }, r)
-  );
-  dashboardUrl = url;
-  fanbasisHandle = fbHandle;
-  personalIgUsername = persHandle;
-  calendarUrl = calUrl;
+  // All config self-provisions from the dashboard bootstrap (merged in background)
+  const s = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" }).catch(() => null) || {};
+  dashboardUrl = s.dashboardUrl || DEFAULT_URL;
+  fanbasisHandle = s.fanbasisHandle || "";
+  personalIgUsername = s.personalIgUsername || "";
+  calendarUrl = s.calendarUrl || "";
+  repToken = s.repToken || "";
+  renderAuth(s);
 
   await loadSnoozedLeads();
   await updateAccountPill();
@@ -1112,11 +1129,8 @@ async function loadData() {
 
 // ── Controls ──────────────────────────────────────────────────────────────────
 
-document.getElementById("openDashboard").addEventListener("click", async () => {
-  const { dashboardUrl: url } = await new Promise((r) =>
-    chrome.storage.sync.get({ dashboardUrl: DEFAULT_URL }, r)
-  );
-  chrome.tabs.create({ url });
+document.getElementById("openDashboard").addEventListener("click", () => {
+  chrome.tabs.create({ url: dashboardUrl || DEFAULT_URL });
 });
 
 document.getElementById("refreshBtn").addEventListener("click", async () => {
@@ -1125,31 +1139,61 @@ document.getElementById("refreshBtn").addEventListener("click", async () => {
   await loadData();
 });
 
-// ── Settings ──────────────────────────────────────────────────────────────────
+// ── Auth — sign-in gate + read-only account status ────────────────────────────
 
-chrome.storage.sync.get({ dashboardUrl: DEFAULT_URL, igSecret: "", fanbasisHandle: "", personalIgUsername: "", calendarUrl: "" }, ({ dashboardUrl: url, igSecret, fanbasisHandle: fbH, personalIgUsername: persH, calendarUrl: calUrl }) => {
-  document.getElementById("settingsDashboardUrl").value = url;
-  if (igSecret) document.getElementById("settingsIgSecret").value = igSecret;
-  if (fbH) document.getElementById("settingsFbHandle").value = fbH;
-  if (persH) document.getElementById("settingsPersonalHandle").value = persH;
-  if (calUrl) document.getElementById("settingsCalendarUrl").value = calUrl;
-});
+function renderAuth(settings) {
+  const gate = document.getElementById("signin-gate");
+  const panel = document.querySelector(".panel");
+  const section = document.getElementById("accountSection");
+  const statusEl = document.getElementById("accountStatus");
+  const signedIn = !!settings?.signedIn;
 
-document.getElementById("saveSettings").addEventListener("click", () => {
-  const url = document.getElementById("settingsDashboardUrl").value.trim().replace(/\/$/, "");
-  const secret = document.getElementById("settingsIgSecret").value.trim();
-  const fbH = document.getElementById("settingsFbHandle").value.trim().replace(/^@/, "");
-  const persH = document.getElementById("settingsPersonalHandle").value.trim().replace(/^@/, "");
-  const calUrl = document.getElementById("settingsCalendarUrl").value.trim().replace(/\/$/, "");
-  chrome.storage.sync.set({ dashboardUrl: url || DEFAULT_URL, igSecret: secret, fanbasisHandle: fbH, personalIgUsername: persH, calendarUrl: calUrl }, () => {
-    fanbasisHandle = fbH;
-    personalIgUsername = persH;
-    calendarUrl = calUrl;
-    updateAccountPill();
-    const ind = document.getElementById("settingsSaved");
-    ind.style.display = "inline";
-    setTimeout(() => (ind.style.display = "none"), 2000);
+  gate.style.display = signedIn ? "none" : "flex";
+  panel.style.display = signedIn ? "" : "none";
+  section.style.display = signedIn ? "" : "none";
+  if (!signedIn) return;
+
+  const rep = settings.rep || {};
+  const dot = (color) => `<span style="width:6px;height:6px;border-radius:50%;background:${color};display:inline-block;flex:0 0 auto"></span>`;
+  const row = "display:flex;align-items:center;gap:7px;font-size:11.5px;color:#cbd5e1;padding:4px 0";
+  statusEl.innerHTML = `
+    <div style="${row}">${dot("#22c55e")} Signed in as ${esc(rep.name || rep.email || "rep")}
+      <button id="signOutBtn" style="margin-left:auto;background:#161616;border:1px solid #2a2a35;border-radius:6px;color:#666;font-size:10px;padding:3px 9px;cursor:pointer">Sign out</button>
+    </div>
+    <div style="${row}">${settings.calendarConnected
+      ? `${dot("#22c55e")} Calendar connected`
+      : `${dot("#f59e0b")} <span style="color:#fbbf24">Calendar not connected</span>
+         <button id="calReconnectBtn" style="margin-left:auto;background:#0f2540;border:1px solid #1d4ed8;border-radius:6px;color:#93c5fd;font-size:10px;padding:3px 9px;cursor:pointer">Connect</button>`}
+    </div>
+    <div style="${row}">${dot("#22c55e")} Team: FanBasis${settings.fanbasisHandle ? ` <span style="color:#5c5c78">(@${esc(settings.fanbasisHandle)})</span>` : ""}</div>`;
+
+  document.getElementById("signOutBtn").addEventListener("click", async () => {
+    await chrome.runtime.sendMessage({ type: "SIGN_OUT" }).catch(() => {});
+    await loadData();
   });
+  // Re-running sign-in upgrades the Google grant with calendar scope
+  document.getElementById("calReconnectBtn")?.addEventListener("click", async (e) => {
+    e.currentTarget.textContent = "…";
+    await chrome.runtime.sendMessage({ type: "SIGN_IN" }).catch(() => {});
+    await loadData();
+  });
+}
+
+document.getElementById("signInBtn").addEventListener("click", async () => {
+  const btn = document.getElementById("signInBtn");
+  const errEl = document.getElementById("signInError");
+  errEl.style.display = "none";
+  btn.disabled = true;
+  btn.lastChild.textContent = " Opening Google…";
+  const res = await chrome.runtime.sendMessage({ type: "SIGN_IN" }).catch((e) => ({ ok: false, error: e.message }));
+  btn.disabled = false;
+  btn.lastChild.textContent = " Sign in with Google";
+  if (res?.ok) {
+    await loadData();
+  } else if (res?.error && res.error !== "cancelled" && !/did not approve/i.test(res.error)) {
+    errEl.textContent = `⚠ Sign-in failed: ${res.error}`;
+    errEl.style.display = "block";
+  }
 });
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -1157,6 +1201,8 @@ document.getElementById("saveSettings").addEventListener("click", () => {
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.fb_cache) loadData();
   if (changes.activeIgAccount) updateAccountPill();
+  // Sign-in/out or a fresh bootstrap from background → refresh gate + status
+  if (changes.fb_rep_token || changes.fb_bootstrap) loadData();
 });
 
 // Refresh when returning from Instagram (e.g., after sending a DM)
@@ -1207,103 +1253,3 @@ loadData().then(() => {
   });
 });
 
-// ── Google Calendar settings ──────────────────────────────────────────────────
-
-async function calInitSettings() {
-  const { cal_calendars: calendars = null } = await new Promise(r =>
-    chrome.storage.local.get({ cal_calendars: null }, r)
-  );
-  const { cal_selected: selected = [], cal_slot_mins: slotMins = 45 } = await new Promise(r =>
-    chrome.storage.sync.get({ cal_selected: [], cal_slot_mins: 45 }, r)
-  );
-
-  if (calendars) {
-    document.getElementById("calDisconnected").style.display = "none";
-    document.getElementById("calConnected").style.display = "block";
-    const primary = calendars.find(c => c.primary);
-    if (primary) {
-      document.getElementById("calConnectedAs").innerHTML =
-        `<span style="width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block"></span> ${primary.summary || primary.id}`;
-    }
-    const wrap = document.getElementById("calListWrap");
-    wrap.innerHTML = "";
-    calendars.forEach(cal => {
-      const isSelected = selected.includes(cal.id);
-      const row = document.createElement("div");
-      row.style.cssText = "display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:5px;background:#13131a;border:1px solid #1e1e2a;cursor:pointer";
-      row.innerHTML = `
-        <input type="checkbox" data-cal-id="${cal.id}" ${isSelected ? "checked" : ""} style="accent-color:#4285F4;cursor:pointer">
-        <span style="font-size:11px;color:${isSelected ? "#ddd" : "#666"}">${cal.summary || cal.id}${cal.primary ? ' <span style="font-size:9px;color:#4285F4;font-weight:700">PRIMARY</span>' : ""}</span>
-      `;
-      row.querySelector("input").addEventListener("change", function() {
-        row.querySelector("span").style.color = this.checked ? "#ddd" : "#666";
-      });
-      row.addEventListener("click", (e) => {
-        if (e.target.tagName !== "INPUT") {
-          const cb = row.querySelector("input");
-          cb.checked = !cb.checked;
-          row.querySelector("span").style.color = cb.checked ? "#ddd" : "#666";
-        }
-      });
-      wrap.appendChild(row);
-    });
-    document.getElementById("calSlotMins").value = String(slotMins);
-  } else {
-    document.getElementById("calDisconnected").style.display = "block";
-    document.getElementById("calConnected").style.display = "none";
-  }
-}
-
-document.getElementById("calConnectBtn")?.addEventListener("click", async () => {
-  const btn = document.getElementById("calConnectBtn");
-  const note = document.getElementById("calClientIdNote");
-  if (note) note.style.display = "none";
-  btn.textContent = "Connecting…";
-  btn.disabled = true;
-  let result = null;
-  try {
-    result = await chrome.runtime.sendMessage({ type: "CONNECT_CALENDAR" });
-  } catch (e) {
-    result = { ok: false, error: e.message };
-  }
-  btn.textContent = "Connect Google Calendar";
-  btn.disabled = false;
-  if (result?.ok) {
-    await calInitSettings();
-  } else {
-    const err = result?.error || "unknown_error";
-    if (note) {
-      if (err === "setup_required") {
-        note.textContent = "⚠ Client ID not configured in background.js.";
-      } else if (err === "cancelled" || err === "The user did not approve access.") {
-        note.textContent = "⚠ Auth cancelled. Make sure you're added as a test user in Google Cloud Console → OAuth consent screen → Test users.";
-      } else {
-        note.textContent = `⚠ Error: ${err}`;
-      }
-      note.style.display = "block";
-    }
-    btn.style.borderColor = "#7f1d1d";
-    btn.style.color = "#ef4444";
-    setTimeout(() => {
-      btn.style.borderColor = "#1d4ed8";
-      btn.style.color = "#93c5fd";
-    }, 4000);
-  }
-});
-
-document.getElementById("calDisconnectBtn")?.addEventListener("click", async () => {
-  await chrome.runtime.sendMessage({ type: "DISCONNECT_CALENDAR" }).catch(() => {});
-  document.getElementById("calDisconnected").style.display = "block";
-  document.getElementById("calConnected").style.display = "none";
-});
-
-document.getElementById("calSaveBtn")?.addEventListener("click", async () => {
-  const checkboxes = document.querySelectorAll("#calListWrap input[type=checkbox]");
-  const selected = [...checkboxes].filter(cb => cb.checked).map(cb => cb.dataset.calId);
-  const slotMins = parseInt(document.getElementById("calSlotMins").value, 10);
-  await chrome.runtime.sendMessage({ type: "SAVE_CALENDAR_SETTINGS", selected, slotMins }).catch(() => {});
-  const saved = document.getElementById("calSaved");
-  if (saved) { saved.style.display = "block"; setTimeout(() => (saved.style.display = "none"), 2000); }
-});
-
-calInitSettings();

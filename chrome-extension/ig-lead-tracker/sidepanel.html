@@ -91,65 +91,22 @@
 
   </div><!-- /.panel -->
 
-  <!-- ── Settings ────────────────────────────────────────────────────── -->
-  <details class="settings-section">
-    <summary>⚙ Settings</summary>
-    <div class="settings-body">
-      <label>Dashboard URL
-        <input id="settingsDashboardUrl" placeholder="https://unified-sales-ops.vercel.app" />
-      </label>
-      <label>IG Events Secret
-        <input id="settingsIgSecret" type="password" placeholder="from Vercel env IG_EVENTS_SECRET" />
-      </label>
-      <label>FanBasis IG Handle
-        <input id="settingsFbHandle" placeholder="e.g. fanbasis_official" />
-      </label>
-      <label>Personal IG Handle
-        <input id="settingsPersonalHandle" placeholder="e.g. your_personal_handle" />
-      </label>
-      <label>Calendar Booking Link
-        <input id="settingsCalendarUrl" placeholder="e.g. https://calendly.com/you/45min" />
-      </label>
-      <hr style="border:none;border-top:1px solid #1e1e2a;margin:14px 0 12px">
-      <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#5c5c78;margin-bottom:10px">Google Calendar</div>
-
-      <!-- Not connected state -->
-      <div id="calDisconnected">
-        <p style="font-size:11px;color:#555;line-height:1.5;margin-bottom:8px">Connect Google Calendar to auto-generate booking DMs with your real open slots.</p>
-        <button id="calConnectBtn" style="width:100%;background:#0f2540;border:1px solid #1d4ed8;border-radius:7px;color:#93c5fd;font-size:12px;font-weight:600;padding:8px;cursor:pointer">Connect Google Calendar</button>
-        <p id="calClientIdNote" style="font-size:10px;color:#F59E0B;margin-top:8px;line-height:1.5;display:none">⚠ One-time setup needed: go to <strong>console.cloud.google.com</strong> → APIs &amp; Services → Credentials → Create OAuth client (Web Application) → add redirect URI: <code style="font-size:9px;background:#1A2235;padding:1px 4px;border-radius:3px">https://ckiknpaiindhapocfloenompedkgneoa.chromiumapp.org/</code> → paste client ID into background.js line 13.</p>
-      </div>
-
-      <!-- Connected state -->
-      <div id="calConnected" style="display:none">
-        <div id="calConnectedAs" style="font-size:11px;color:#22c55e;margin-bottom:10px;display:flex;align-items:center;gap:5px">
-          <span style="width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block"></span>
-          Connected
-        </div>
-        <div style="font-size:10px;font-weight:600;letter-spacing:.06em;color:#5c5c78;text-transform:uppercase;margin-bottom:6px">Include in availability</div>
-        <div id="calListWrap" style="display:flex;flex-direction:column;gap:4px;margin-bottom:10px"></div>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-          <span style="font-size:11px;color:#666">Slot duration</span>
-          <select id="calSlotMins" style="flex:1;background:#1a1a1a;border:1px solid #2a2a35;border-radius:5px;color:#ddd;font-size:11px;padding:4px 7px">
-            <option value="15">15 min</option>
-            <option value="30">30 min</option>
-            <option value="45" selected>45 min</option>
-            <option value="60">60 min</option>
-          </select>
-        </div>
-        <div style="display:flex;gap:7px">
-          <button id="calSaveBtn" class="btn-save" style="flex:1">Save calendar settings</button>
-          <button id="calDisconnectBtn" style="background:#161616;border:1px solid #2a1a1a;border-radius:6px;color:#666;font-size:11px;padding:5px 10px;cursor:pointer">Disconnect</button>
-        </div>
-        <span id="calSaved" style="font-size:11px;color:#22c55e;display:none;margin-top:6px">✓ Saved</span>
-      </div>
-
-      <div class="settings-footer">
-        <button id="saveSettings" class="btn-save">Save</button>
-        <span id="settingsSaved" class="saved-indicator" style="display:none">✓ Saved</span>
-      </div>
-    </div>
+  <!-- ── Account status (read-only — everything provisions from one sign-in) ── -->
+  <details class="settings-section" id="accountSection">
+    <summary>⚙ Account</summary>
+    <div class="settings-body" id="accountStatus"></div>
   </details>
+
+  <!-- ── Sign-in gate — the only thing shown until the rep signs in ──── -->
+  <div id="signin-gate" style="display:none;position:fixed;inset:0;z-index:999;background:#0b0b12;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:32px;text-align:center">
+    <span class="logo" style="font-size:22px">FanBasis</span>
+    <p style="font-size:12px;color:#5c5c78;line-height:1.6;max-width:230px;margin:0">One sign-in connects your leads, your identity, and your calendar. Nothing else to set up.</p>
+    <button id="signInBtn" style="display:flex;align-items:center;gap:10px;background:#fff;border:none;border-radius:8px;color:#1f1f1f;font-size:13px;font-weight:600;padding:10px 20px;cursor:pointer">
+      <svg width="16" height="16" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.2C12.4 13.4 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.6 5.9c4.5-4.1 7-10.2 7-17.6z"/><path fill="#FBBC05" d="M10.5 28.6c-.5-1.5-.8-3-.8-4.6s.3-3.1.8-4.6l-7.9-6.2C.9 16.5 0 20.1 0 24s.9 7.5 2.6 10.8l7.9-6.2z"/><path fill="#34A853" d="M24 48c6.3 0 11.6-2.1 15.5-5.7l-7.6-5.9c-2.1 1.4-4.8 2.3-7.9 2.3-6.3 0-11.6-3.9-13.5-9.3l-7.9 6.2C6.5 42.6 14.6 48 24 48z"/></svg>
+      Sign in with Google
+    </button>
+    <p id="signInError" style="display:none;font-size:11px;color:#ef4444;line-height:1.5;max-width:240px;margin:0"></p>
+  </div>
 
   <!-- ── Calendly-style booking overlay ────────────────────────────── -->
   <div id="sp-book-overlay" style="display:none">

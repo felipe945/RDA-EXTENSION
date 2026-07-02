@@ -256,15 +256,41 @@
   }
 
   async function getSettings() {
-    return new Promise((resolve) => {
-      chrome.storage.sync.get({
+    // Bootstrap (cached by background after sign-in) wins over legacy storage.sync
+    const [sync, local] = await Promise.all([
+      new Promise((r) => chrome.storage.sync.get({
         dashboardUrl: "https://unified-sales-ops.vercel.app",
         igSecret: "",
         calendarUrl: "",
         personalIgUsername: "felipeguimars",
         fanbasisHandle: "fanbasis",
-      }, resolve);
-    });
+      }, r)),
+      new Promise((r) => chrome.storage.local.get({ fb_bootstrap: null, fb_rep_token: null }, r)),
+    ]);
+    const boot = local.fb_bootstrap;
+    return {
+      dashboardUrl: boot?.dashboardUrl || sync.dashboardUrl,
+      igSecret: sync.igSecret,
+      repToken: local.fb_rep_token || "",
+      calendarUrl: sync.calendarUrl,
+      personalIgUsername: boot?.rep?.personalIgUsername || sync.personalIgUsername,
+      fanbasisHandle: boot?.fanbasisHandle || sync.fanbasisHandle,
+    };
+  }
+
+  async function repAuthHeader() {
+    const { fb_rep_token } = await new Promise((r) => chrome.storage.local.get({ fb_rep_token: null }, r));
+    return fb_rep_token ? { Authorization: `Bearer ${fb_rep_token}` } : {};
+  }
+
+  // C4 — Bearer repToken is the identity on /api/ig-events; keep sending the
+  // legacy x-ig-secret alongside it during the rollout.
+  async function igEventsHeaders(igSecret) {
+    return {
+      "Content-Type": "application/json",
+      ...(igSecret ? { "x-ig-secret": igSecret } : {}),
+      ...(await repAuthHeader()),
+    };
   }
 
   function detectCurrentIgAccountFromDom() {
@@ -384,7 +410,7 @@
       const tid = setTimeout(() => ctrl.abort(), 8000);
       const res = await fetch(
         `${dashboardUrl}/api/leads?ig_username=${encodeURIComponent(username)}`,
-        { signal: ctrl.signal, headers: { Accept: "application/json" } }
+        { signal: ctrl.signal, headers: { Accept: "application/json", ...(await repAuthHeader()) } }
       );
       clearTimeout(tid);
       if (!res.ok) return null;
@@ -506,7 +532,7 @@
         try {
           const res = await fetch(`${dashboardUrl}/api/ig-events`, {
             method: "POST",
-            headers: { "Content-Type": "application/json", "x-ig-secret": item.igSecret },
+            headers: await igEventsHeaders(item.igSecret),
             body: JSON.stringify(item.payload),
           });
           if (!res.ok) remaining.push(item);
@@ -544,7 +570,7 @@
     try {
       const res = await fetch(`${dashboardUrl}/api/ig-events`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-ig-secret": igSecret },
+        headers: await igEventsHeaders(igSecret),
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error(String(res.status));
@@ -929,7 +955,7 @@
     try {
       await fetch(`${dashboardUrl}/api/leads`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await repAuthHeader()) },
         body: JSON.stringify({ id: leadId, outreach_channels: updated }),
       });
     } catch { /* ignore */ }
@@ -1387,7 +1413,8 @@
       const ctrl = new AbortController();
       const abortTimer = setTimeout(() => ctrl.abort(), 9000);
 
-      fetch(url, { signal: ctrl.signal })
+      repAuthHeader()
+        .then(auth => fetch(url, { signal: ctrl.signal, headers: auth }))
         .then(r => {
           clearTimeout(abortTimer);
           if (!r.ok) throw new Error(`opener API ${r.status}`);
@@ -1974,6 +2001,13 @@
       savedBookCalBtn.textContent = "📅 Book a Call";
       savedBookCalBtn.style.cssText = "flex:1;background:#0f2540;border:1px solid #1d4ed8;border-radius:6px;color:#93c5fd;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
       savedBookCalBtn.addEventListener("click", async () => {
+        if (savedBookCalBtn.dataset.connect) {
+          // Second click after "Connect calendar" — re-sign-in upgrades the Google scope
+          delete savedBookCalBtn.dataset.connect;
+          savedBookCalBtn.textContent = "📅 Book a Call";
+          chrome.runtime.sendMessage({ type: "SIGN_IN" }).catch(() => {});
+          return;
+        }
         savedBookCalBtn.textContent = "Checking…";
         savedBookCalBtn.disabled = true;
         const result = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS" }).catch(() => null);
@@ -1981,6 +2015,9 @@
         savedBookCalBtn.disabled = false;
         if (result?.ok && result.slots && result.slots.length) {
           showSlotPicker(card, b, username, lead, dashboardUrl, result.slots, result.slotMins);
+        } else if (result?.needsCalendar || result?.needsSignIn) {
+          savedBookCalBtn.dataset.connect = "1";
+          savedBookCalBtn.textContent = "🔗 Connect calendar";
         } else {
           const calScript = calendarUrl
             ? `Hey [Name] — happy to walk you through the dashboard, no pitch, just 15 min to show you what it looks like with your numbers.\n\nHere's my link: ${calendarUrl} — grab whatever works and I'll send context beforehand.`
@@ -2082,7 +2119,7 @@
 
   async function fetchRecentMessages(leadId, dashboardUrl) {
     try {
-      const res = await fetch(`${dashboardUrl}/api/messages?lead_id=${encodeURIComponent(leadId)}&limit=4`);
+      const res = await fetch(`${dashboardUrl}/api/messages?lead_id=${encodeURIComponent(leadId)}&limit=4`, { headers: await repAuthHeader() });
       if (!res.ok) return [];
       const { messages } = await res.json();
       return messages ?? [];
@@ -2265,11 +2302,21 @@
     bookCalBtn.textContent = "📅 Book a Call";
     bookCalBtn.style.cssText = "flex:1;background:#0f2540;border:1px solid #1d4ed8;border-radius:6px;color:#93c5fd;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
     bookCalBtn.addEventListener("click", async () => {
+      if (bookCalBtn.dataset.connect) {
+        // Second click after "Connect calendar" — re-sign-in upgrades the Google scope
+        delete bookCalBtn.dataset.connect;
+        bookCalBtn.textContent = "📅 Book a Call";
+        chrome.runtime.sendMessage({ type: "SIGN_IN" }).catch(() => {});
+        return;
+      }
       bookCalBtn.textContent = "Checking…"; bookCalBtn.disabled = true;
       const result = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS" }).catch(() => null);
       bookCalBtn.textContent = "📅 Book a Call"; bookCalBtn.disabled = false;
       if (result?.ok && result.slots && result.slots.length) {
         showSlotPicker(card, b, username, lead, dashboardUrl, result.slots, result.slotMins);
+      } else if (result?.needsCalendar || result?.needsSignIn) {
+        bookCalBtn.dataset.connect = "1";
+        bookCalBtn.textContent = "🔗 Connect calendar";
       } else {
         const calScript = calendarUrl
           ? `Hey [Name] — happy to walk you through the dashboard, no pitch, just 15 min to show you what it looks like with your numbers.\n\nHere's my link: ${calendarUrl} — grab whatever works and I'll send context beforehand.`

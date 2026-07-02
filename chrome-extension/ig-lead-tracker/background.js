@@ -6,134 +6,56 @@
 
 const DEFAULT_URL = "https://unified-sales-ops.vercel.app";
 
-// ── Google Calendar OAuth (launchWebAuthFlow) ─────────────────────────────────
-// Extension ID is locked via manifest "key"; ID = ckiknpaiindhapocfloenompedkgneoa
-// User must create a "Web Application" OAuth 2.0 client in Google Cloud Console
-// and add redirect URI: https://ckiknpaiindhapocfloenompedkgneoa.chromiumapp.org/
-// Replace GCAL_CLIENT_ID below with the client_id from that OAuth client.
-const GCAL_CLIENT_ID = "900158593205-51agpesm5j4bsutsccc6trkh5ous061j.apps.googleusercontent.com";
-const GCAL_REDIRECT = "https://ckiknpaiindhapocfloenompedkgneoa.chromiumapp.org/";
-const GCAL_SCOPES = [
-  "https://www.googleapis.com/auth/calendar.readonly",
-  "https://www.googleapis.com/auth/calendar.events",
-  "email",
-  "profile",
-].join(" ");
+// ── Rep auth (CONNECT contracts C1/C2) ────────────────────────────────────────
+// The extension never runs its own Google OAuth. Sign-in goes through the
+// dashboard: launchWebAuthFlow → /api/extension/auth/start → `#token=<repToken>`
+// (a 90-day JWT minted by the dashboard). 401 anywhere = signed out.
 
-async function getCalToken(interactive) {
-  const { cal_token, cal_token_exp } = await chrome.storage.local.get({ cal_token: null, cal_token_exp: 0 });
-  if (cal_token && cal_token_exp - Date.now() > 5 * 60 * 1000) return cal_token;
-  if (!interactive) throw new Error("not_connected");
-  // Re-auth silently if possible, else prompt
-  const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-  authUrl.searchParams.set("client_id", GCAL_CLIENT_ID);
-  authUrl.searchParams.set("redirect_uri", GCAL_REDIRECT);
-  authUrl.searchParams.set("response_type", "token");
-  authUrl.searchParams.set("scope", GCAL_SCOPES);
-  authUrl.searchParams.set("prompt", "none");
-  try {
-    const url = await new Promise((res, rej) =>
-      chrome.identity.launchWebAuthFlow({ url: authUrl.toString(), interactive: false }, u => {
-        if (chrome.runtime.lastError || !u) rej(new Error("silent_failed"));
-        else res(u);
-      })
-    );
-    const token = new URLSearchParams(new URL(url).hash.slice(1)).get("access_token");
-    const exp = parseInt(new URLSearchParams(new URL(url).hash.slice(1)).get("expires_in") || "3600");
-    if (!token) throw new Error("no_token");
-    await chrome.storage.local.set({ cal_token: token, cal_token_exp: Date.now() + exp * 1000 });
-    return token;
-  } catch {
-    throw new Error("not_connected");
-  }
+async function getRepToken() {
+  const { fb_rep_token } = await chrome.storage.local.get({ fb_rep_token: null });
+  return fb_rep_token;
 }
 
-// ── Google Calendar helpers ───────────────────────────────────────────────────
-
-function calFindOpenSlots(freeBusyData, slotMins, maxSlots) {
-  slotMins = slotMins || 30;
-  maxSlots = maxSlots || 5;
-  const slotMs = slotMins * 60 * 1000;
-  const now = Date.now();
-
-  const allBusy = [];
-  const cals = (freeBusyData && freeBusyData.calendars) || {};
-  for (const key of Object.keys(cals)) {
-    for (const b of (cals[key].busy || [])) {
-      allBusy.push({ start: new Date(b.start).getTime(), end: new Date(b.end).getTime() });
-    }
-  }
-
-  // Start at least 1 hour from now, rounded up to next 15-min mark
-  let cursor = Math.ceil((now + 60 * 60 * 1000) / (15 * 60 * 1000)) * (15 * 60 * 1000);
-  const endTs = now + 7 * 24 * 60 * 60 * 1000;
-  const slots = [];
-
-  while (cursor < endTs && slots.length < maxSlots) {
-    const d = new Date(cursor);
-    const day = d.getDay();
-    const hour = d.getHours();
-    const min = d.getMinutes();
-
-    if (day === 0 || day === 6) {
-      const skip = new Date(cursor);
-      skip.setDate(skip.getDate() + (day === 0 ? 1 : 2));
-      skip.setHours(9, 0, 0, 0);
-      cursor = skip.getTime();
-      continue;
-    }
-    if (hour < 9) {
-      const skip = new Date(cursor);
-      skip.setHours(9, 0, 0, 0);
-      cursor = skip.getTime();
-      continue;
-    }
-    const slotEndTs = cursor + slotMs;
-    const slotEndD = new Date(slotEndTs);
-    if (slotEndD.getHours() > 18 || (slotEndD.getHours() === 18 && slotEndD.getMinutes() > 0)) {
-      const skip = new Date(cursor);
-      skip.setDate(skip.getDate() + 1);
-      skip.setHours(9, 0, 0, 0);
-      cursor = skip.getTime();
-      continue;
-    }
-
-    const isBusy = allBusy.some(b => cursor < b.end && slotEndTs > b.start);
-    if (!isBusy) slots.push({ start: new Date(cursor).toISOString(), end: new Date(slotEndTs).toISOString() });
-    cursor += 15 * 60 * 1000;
-  }
-  return slots;
+async function authHeader() {
+  const token = await getRepToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-function calFormatSlot(isoStart) {
-  const d = new Date(isoStart);
-  const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const h = d.getHours();
-  const m = d.getMinutes();
-  const h12 = h % 12 || 12;
-  const ampm = h >= 12 ? "pm" : "am";
-  const minStr = m === 0 ? "" : `:${String(m).padStart(2, "0")}`;
-  return `${days[d.getDay()]} ${months[d.getMonth()]} ${d.getDate()} · ${h12}${minStr}${ampm}`;
+async function signOut() {
+  await chrome.storage.local.remove(["fb_rep_token", "fb_bootstrap"]);
 }
 
-function calFormatSlotsForDm(isoStarts) {
-  if (!isoStarts.length) return "";
-  const d = new Date(isoStarts[0]);
-  const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  function fmt(iso) {
-    const dt = new Date(iso);
-    const h = dt.getHours(); const m = dt.getMinutes();
-    const h12 = h % 12 || 12; const ampm = h >= 12 ? "pm" : "am";
-    const minStr = m === 0 ? "" : `:${String(m).padStart(2, "0")}`;
-    return `${days[dt.getDay()]} at ${h12}${minStr}${ampm}`;
-  }
-  const texts = isoStarts.map(fmt);
-  if (texts.length === 1) return texts[0];
-  if (texts.length === 2) return `${texts[0]} or ${texts[1]}`;
-  const last = texts.pop();
-  return texts.join(", ") + ", or " + last;
+// C2 — self-provision all config from the dashboard; cached in fb_bootstrap
+async function fetchBootstrap() {
+  const token = await getRepToken();
+  if (!token) return null;
+  const { dashboardUrl } = await getSettings();
+  const res = await fetch(`${dashboardUrl}/api/extension/bootstrap`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 401) { await signOut(); return null; }
+  if (!res.ok) throw new Error(`bootstrap_${res.status}`);
+  const data = await res.json();
+  if (!data?.ok) throw new Error("bootstrap_bad_response");
+  await chrome.storage.local.set({ fb_bootstrap: data });
+  return data;
+}
+
+// C1 — one Google sign-in, brokered by the dashboard
+async function signIn() {
+  const { dashboardUrl } = await getSettings();
+  const extRedirect = chrome.identity.getRedirectURL();
+  const startUrl = `${dashboardUrl}/api/extension/auth/start?ext_redirect=${encodeURIComponent(extRedirect)}`;
+  const responseUrl = await new Promise((resolve, reject) =>
+    chrome.identity.launchWebAuthFlow({ url: startUrl, interactive: true }, (url) => {
+      if (chrome.runtime.lastError || !url) reject(new Error(chrome.runtime.lastError?.message || "cancelled"));
+      else resolve(url);
+    })
+  );
+  const token = new URLSearchParams(new URL(responseUrl).hash.slice(1)).get("token");
+  if (!token) throw new Error("no_token");
+  await chrome.storage.local.set({ fb_rep_token: token });
+  return fetchBootstrap();
 }
 
 let cache = { leads: [], notifications: [], overdue: [], lastFetch: 0 };
@@ -141,20 +63,37 @@ const seenNotifIds = new Set();
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
+// Bootstrap values win; legacy storage.sync fields (and the hardcoded prod URL)
+// only cover the window before the first sign-in.
 async function getSettings() {
-  return new Promise((resolve) =>
-    chrome.storage.sync.get({ dashboardUrl: DEFAULT_URL, igSecret: "", fanbasisHandle: "fanbasis", personalIgUsername: "felipeguimars" }, resolve)
-  );
+  const [sync, local] = await Promise.all([
+    chrome.storage.sync.get({ dashboardUrl: DEFAULT_URL, igSecret: "", fanbasisHandle: "fanbasis", personalIgUsername: "felipeguimars", calendarUrl: "" }),
+    chrome.storage.local.get({ fb_bootstrap: null, fb_rep_token: null }),
+  ]);
+  const boot = local.fb_bootstrap;
+  return {
+    dashboardUrl: boot?.dashboardUrl || sync.dashboardUrl || DEFAULT_URL,
+    igSecret: sync.igSecret,
+    repToken: local.fb_rep_token || "",
+    signedIn: !!local.fb_rep_token,
+    fanbasisHandle: boot?.fanbasisHandle || sync.fanbasisHandle,
+    personalIgUsername: boot?.rep?.personalIgUsername || sync.personalIgUsername,
+    calendarUrl: sync.calendarUrl,
+    slotMins: boot?.calendar?.slotMins || 30,
+    rep: boot?.rep || null,
+    calendarConnected: !!boot?.calendar?.connected,
+  };
 }
 
 // ── Cache refresh ─────────────────────────────────────────────────────────────
 
 async function refreshCache() {
   const { dashboardUrl } = await getSettings();
+  const bearer = await authHeader();
   try {
     const [leadsRes, notifsRes] = await Promise.allSettled([
-      fetch(`${dashboardUrl}/api/leads?mode=sales`),
-      fetch(`${dashboardUrl}/api/notifications?mode=sales`),
+      fetch(`${dashboardUrl}/api/leads?mode=sales`, { headers: bearer }),
+      fetch(`${dashboardUrl}/api/notifications?mode=sales`, { headers: bearer }),
     ]);
 
     if (leadsRes.status === "fulfilled" && leadsRes.value.ok) {
@@ -198,7 +137,9 @@ async function refreshCache() {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
-    const { dashboardUrl, igSecret } = await getSettings();
+    const settings = await getSettings();
+    const { dashboardUrl, igSecret } = settings;
+    const bearer = settings.repToken ? { Authorization: `Bearer ${settings.repToken}` } : {};
 
     switch (msg.type) {
 
@@ -211,8 +152,35 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         break;
 
       case "GET_SETTINGS":
-        sendResponse({ dashboardUrl, igSecret });
+        sendResponse(settings);
         break;
+
+      case "SIGN_IN": {
+        try {
+          const bootstrap = await signIn();
+          setTimeout(refreshCache, 500);
+          sendResponse({ ok: true, bootstrap });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+        break;
+      }
+
+      case "SIGN_OUT": {
+        await signOut();
+        sendResponse({ ok: true });
+        break;
+      }
+
+      case "REFRESH_BOOTSTRAP": {
+        try {
+          const bootstrap = await fetchBootstrap();
+          sendResponse({ ok: !!bootstrap, bootstrap });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+        break;
+      }
 
       case "FB_PROFILE_ACTIVE":
         sendResponse({ ok: true });
@@ -225,11 +193,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       case "IG_FOLLOW":
       case "IG_LIKE": {
-        if (igSecret) {
+        // C4: Bearer repToken is the identity; keep x-ig-secret during rollout
+        if (igSecret || bearer.Authorization) {
           const { activeIgAccount: fromAcct = "" } = await chrome.storage.local.get({ activeIgAccount: "" });
           fetch(`${dashboardUrl}/api/ig-events`, {
             method: "POST",
-            headers: { "Content-Type": "application/json", "x-ig-secret": igSecret },
+            headers: { "Content-Type": "application/json", ...(igSecret ? { "x-ig-secret": igSecret } : {}), ...bearer },
             body: JSON.stringify({
               type: msg.type === "IG_FOLLOW" ? "follow" : "like",
               username: msg.username,
@@ -249,7 +218,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         try {
           const res = await fetch(`${dashboardUrl}/api/leads`, {
             method: "PATCH",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...bearer },
             body: JSON.stringify({ id: msg.id, ...msg.updates }),
           });
           if (!res.ok) throw new Error(String(res.status));
@@ -281,7 +250,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         try {
           await fetch(`${dashboardUrl}/api/leads`, {
             method: "PATCH",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...bearer },
             body: JSON.stringify({ id: leadId, stage, updated_at: new Date().toISOString() }),
           });
           chrome.tabs.query({ url: "https://www.instagram.com/*" }, (tabs) => {
@@ -327,7 +296,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // detected by multiple reps on the shared account (null → plain insert).
           fetch(`${dashboardUrl}/api/messages`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...bearer },
             body: JSON.stringify({
               lead_id: matched.id,
               channel: platform,
@@ -344,7 +313,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           if (EARLY_STAGES.includes(matched.stage)) {
             fetch(`${dashboardUrl}/api/leads`, {
               method: "PATCH",
-              headers: { "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json", ...bearer },
               body: JSON.stringify({ id: matched.id, stage: "Replied" }),
             }).catch(() => {});
           }
@@ -380,7 +349,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // Log touchpoint so dashboard's TouchpointsTab shows this DM
           fetch(`${dashboardUrl}/api/leads/${leadId}/touchpoints`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...bearer },
             body: JSON.stringify({ channel: channel || "ig_dm", result: "sent", note: `Sent via FanBasis extension (${channelLabel})` }),
           }).catch(() => {});
           // Advance stage to DM Sent if still in early stages
@@ -390,7 +359,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             const due = new Date(Date.now() + 3 * 24 * 3600000).toISOString();
             fetch(`${dashboardUrl}/api/leads`, {
               method: "PATCH",
-              headers: { "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json", ...bearer },
               body: JSON.stringify({ id: leadId, stage: "DM Sent", last_contact_at: new Date().toISOString(), due_at: due }),
             }).catch(() => {});
           }
@@ -406,114 +375,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         break;
       }
 
-      case "CONNECT_CALENDAR": {
-        try {
-          console.log("[CAL] CONNECT_CALENDAR start, client_id:", GCAL_CLIENT_ID.slice(0, 20) + "…");
-          if (GCAL_CLIENT_ID === "PASTE_YOUR_WEB_APP_CLIENT_ID_HERE") {
-            sendResponse({ ok: false, error: "setup_required" });
-            break;
-          }
-          const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-          authUrl.searchParams.set("client_id", GCAL_CLIENT_ID);
-          authUrl.searchParams.set("redirect_uri", GCAL_REDIRECT);
-          authUrl.searchParams.set("response_type", "token");
-          authUrl.searchParams.set("scope", GCAL_SCOPES);
-          authUrl.searchParams.set("prompt", "select_account");
-          console.log("[CAL] launching flow, redirect:", GCAL_REDIRECT);
-          const responseUrl = await new Promise((resolve, reject) =>
-            chrome.identity.launchWebAuthFlow({ url: authUrl.toString(), interactive: true }, (url) => {
-              console.log("[CAL] launchWebAuthFlow callback, url:", url, "error:", chrome.runtime.lastError?.message);
-              if (chrome.runtime.lastError || !url) reject(new Error(chrome.runtime.lastError?.message || "cancelled"));
-              else resolve(url);
-            })
-          );
-          console.log("[CAL] responseUrl:", responseUrl);
-          const hash = new URL(responseUrl).hash.slice(1);
-          const params = new URLSearchParams(hash);
-          const token = params.get("access_token");
-          const expiresIn = parseInt(params.get("expires_in") || "3600");
-          console.log("[CAL] token present:", !!token, "error param:", params.get("error"));
-          if (!token) throw new Error(params.get("error") || "no_token");
-          const expiresAt = Date.now() + expiresIn * 1000;
-          const resp = await fetch(
-            "https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=reader",
-            { headers: { Authorization: `Bearer ${token}` } }
-          );
-          console.log("[CAL] calendarList status:", resp.status);
-          if (!resp.ok) throw new Error(`calendarList ${resp.status}`);
-          const data = await resp.json();
-          const calendars = (data.items || []).map(c => ({
-            id: c.id,
-            summary: c.summary || c.id,
-            primary: !!c.primary,
-            backgroundColor: c.backgroundColor || "#4285F4",
-          }));
-          const primaryCal = calendars.find(c => c.primary);
-          const calUserName = primaryCal?.summary || "";
-          await chrome.storage.local.set({ cal_token: token, cal_token_exp: expiresAt, cal_calendars: calendars, cal_user_name: calUserName });
-          const existing = await new Promise(r => chrome.storage.sync.get({ cal_selected: [] }, r));
-          if (!existing.cal_selected.length) {
-            const primaryId = (calendars.find(c => c.primary) || calendars[0])?.id;
-            if (primaryId) await chrome.storage.sync.set({ cal_selected: [primaryId] });
-          }
-          console.log("[CAL] connected, calendars:", calendars.length);
-          sendResponse({ ok: true, calendars });
-        } catch (err) {
-          console.error("[CAL] error:", err.message);
-          sendResponse({ ok: false, error: err.message });
-        }
-        break;
-      }
-
-      case "DISCONNECT_CALENDAR": {
-        const { cal_token: t } = await chrome.storage.local.get({ cal_token: null });
-        if (t) {
-          await fetch(`https://accounts.google.com/o/oauth2/revoke?token=${t}`).catch(() => {});
-        }
-        await chrome.storage.local.remove(["cal_token", "cal_token_exp", "cal_calendars"]);
-        await chrome.storage.sync.remove(["cal_selected", "cal_slot_mins"]);
-        sendResponse({ ok: true });
-        break;
-      }
-
-      case "GET_CALENDAR_LIST": {
-        const { cal_calendars: calendars = null } = await chrome.storage.local.get({ cal_calendars: null });
-        sendResponse({ ok: !!calendars, calendars: calendars || [] });
-        break;
-      }
-
-      case "SAVE_CALENDAR_SETTINGS": {
-        const { selected, slotMins } = msg;
-        await chrome.storage.sync.set({ cal_selected: selected || [], cal_slot_mins: slotMins || 30 });
-        sendResponse({ ok: true });
-        break;
-      }
-
+      // C3 — calendar lives server-side now; both handlers keep their message
+      // names so the booking UIs barely change.
       case "CREATE_CALENDAR_EVENT": {
         try {
-          const token = await getCalToken(false);
+          if (!bearer.Authorization) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
           const { slotStart, slotEnd, leadName, guestEmail } = msg;
-          const { cal_user_name: userName = "FanBasis" } = await chrome.storage.local.get({ cal_user_name: "" });
-          const displayLead = (leadName || "Lead").split(" ").slice(0, 2).join(" ");
-          const displayUser = (userName || "FanBasis").split(" ")[0];
-          const title = `FanBasis Discovery: ${displayLead} X ${displayUser}`;
-          const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-          const body = {
-            summary: title,
-            start: { dateTime: slotStart, timeZone },
-            end: { dateTime: slotEnd, timeZone },
-            status: "tentative",
-            description: "Booking sent via FanBasis Sales Extension",
-            ...(guestEmail ? { attendees: [{ email: guestEmail }] } : {}),
-          };
-          const resp = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+          const resp = await fetch(`${dashboardUrl}/api/calendar/book`, {
             method: "POST",
-            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            body: JSON.stringify(body),
+            headers: { "Content-Type": "application/json", ...bearer },
+            body: JSON.stringify({ slotStart, slotEnd, leadName, guestEmail }),
           });
-          if (!resp.ok) throw new Error(`create_event_${resp.status}`);
-          const event = await resp.json();
-          sendResponse({ ok: true, eventId: event.id, eventLink: event.htmlLink });
+          if (resp.status === 401) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
+          const data = await resp.json().catch(() => null);
+          if (data?.needsCalendar) { sendResponse({ ok: false, needsCalendar: true }); break; }
+          if (!resp.ok || !data?.ok) throw new Error(`book_${resp.status}`);
+          sendResponse({ ok: true, eventId: data.eventId, eventLink: data.htmlLink });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
         }
@@ -522,29 +399,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       case "GET_CALENDAR_SLOTS": {
         try {
-          const token = await getCalToken(false);
-          const { cal_selected: selected = [], cal_slot_mins: slotMins = 30 } =
-            await new Promise(r => chrome.storage.sync.get({ cal_selected: [], cal_slot_mins: 30 }, r));
-          if (!selected.length) { sendResponse({ ok: false, error: "no_calendars" }); break; }
-          const timeMin = new Date().toISOString();
-          const timeMax = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-          const fbResp = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
-            method: "POST",
-            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ timeMin, timeMax, items: selected.map(id => ({ id })) }),
-          });
-          if (!fbResp.ok) {
-            if (fbResp.status === 401) {
-              await chrome.storage.local.remove(["cal_token"]);
-              sendResponse({ ok: false, error: "token_expired" });
-            } else {
-              sendResponse({ ok: false, error: `freebusy_${fbResp.status}` });
-            }
-            break;
-          }
-          const fbData = await fbResp.json();
-          const slots = calFindOpenSlots(fbData, slotMins, 5);
-          sendResponse({ ok: true, slots, slotMins });
+          if (!bearer.Authorization) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
+          const slotMins = settings.slotMins || 30;
+          const resp = await fetch(`${dashboardUrl}/api/calendar/slots?days=7&slotMins=${slotMins}`, { headers: bearer });
+          if (resp.status === 401) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
+          const data = await resp.json().catch(() => null);
+          if (data?.needsCalendar) { sendResponse({ ok: false, needsCalendar: true }); break; }
+          if (!resp.ok || !data?.ok) throw new Error(`slots_${resp.status}`);
+          sendResponse({ ok: true, slots: data.slots || [], slotMins });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
         }
@@ -574,11 +436,21 @@ chrome.notifications.onClicked.addListener(async () => {
 
 // ── Startup ───────────────────────────────────────────────────────────────────
 
-chrome.runtime.onStartup.addListener(refreshCache);
-chrome.runtime.onInstalled.addListener(refreshCache);
+chrome.runtime.onStartup.addListener(() => {
+  refreshCache();
+  fetchBootstrap().catch(() => {});
+});
+chrome.runtime.onInstalled.addListener(() => {
+  refreshCache();
+  fetchBootstrap().catch(() => {});
+  // v2.2.0: the extension no longer runs its own Google OAuth — drop its tokens
+  chrome.storage.local.remove(["cal_token", "cal_token_exp", "cal_calendars", "cal_user_name"]).catch(() => {});
+  chrome.storage.sync.remove(["cal_selected", "cal_slot_mins"]).catch(() => {});
+});
 
 // Seed cache from local storage, then refresh live
 chrome.storage.local.get({ fb_cache: null }, ({ fb_cache }) => {
   if (fb_cache) cache = fb_cache;
   refreshCache();
+  fetchBootstrap().catch(() => {});
 });
