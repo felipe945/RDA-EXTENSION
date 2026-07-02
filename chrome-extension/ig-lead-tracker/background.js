@@ -401,16 +401,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case "CREATE_CALENDAR_EVENT": {
         try {
           if (!bearer.Authorization) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
-          const { slotStart, slotEnd, leadName, guestEmail } = msg;
+          const { slotStart, slotEnd, leadName, guestEmail, aeId } = msg;
           const resp = await fetch(`${dashboardUrl}/api/calendar/book`, {
             method: "POST",
             headers: { "Content-Type": "application/json", ...bearer },
-            body: JSON.stringify({ slotStart, slotEnd, leadName, guestEmail }),
+            body: JSON.stringify({ slotStart, slotEnd, leadName, guestEmail, aeId: aeId || undefined }),
           });
           if (resp.status === 401) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
           const data = await resp.json().catch(() => null);
           if (data?.needsCalendar) { sendResponse({ ok: false, needsCalendar: true }); break; }
-          if (!resp.ok || !data?.ok) throw new Error(`book_${resp.status}`);
+          // Pass server error codes (slot_taken, ae_calendar_unreadable)
+          // through so the pickers can react specifically.
+          if (!resp.ok || !data?.ok) { sendResponse({ ok: false, error: data?.error || `book_${resp.status}` }); break; }
           sendResponse({ ok: true, eventId: data.eventId, eventLink: data.htmlLink });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
@@ -422,12 +424,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         try {
           if (!bearer.Authorization) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
           const slotMins = settings.slotMins || 30;
-          const resp = await fetch(`${dashboardUrl}/api/calendar/slots?days=7&slotMins=${slotMins}`, { headers: bearer });
+          const ae = msg.aeId ? `&aeId=${msg.aeId}` : "";
+          const resp = await fetch(`${dashboardUrl}/api/calendar/slots?days=14&slotMins=${slotMins}${ae}`, { headers: bearer });
           if (resp.status === 401) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
           const data = await resp.json().catch(() => null);
           if (data?.needsCalendar) { sendResponse({ ok: false, needsCalendar: true }); break; }
-          if (!resp.ok || !data?.ok) throw new Error(`slots_${resp.status}`);
+          if (!resp.ok || !data?.ok) { sendResponse({ ok: false, error: data?.error || `slots_${resp.status}` }); break; }
           sendResponse({ ok: true, slots: data.slots || [], slotMins });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+        break;
+      }
+
+      // AE list for the booking pickers — who discovery calls get booked with.
+      case "GET_AES": {
+        try {
+          if (!bearer.Authorization) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
+          const resp = await fetch(`${dashboardUrl}/api/aes`, { headers: bearer });
+          if (resp.status === 401) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
+          const data = await resp.json().catch(() => null);
+          if (!resp.ok || !data?.ok) { sendResponse({ ok: false, error: `aes_${resp.status}` }); break; }
+          sendResponse({ ok: true, aes: (data.aes || []).filter(a => a.active) });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
         }

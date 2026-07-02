@@ -523,20 +523,42 @@ function buildOutreachQueue(channel) {
   return window.FBQueue.buildQueue(allLeads, { channel, snoozed: snoozedLeads });
 }
 
-function showSidepanelSlotPicker(_container, lead, slots, slotMins) {
-  slotMins = slotMins || 30;
-  const leadName = lead?.name || (lead?.ig_username ? `@${lead.ig_username}` : "Lead");
+// AE selection (who the discovery call is with) — shared with the IG content
+// script via chrome.storage.sync so the rep picks once.
+async function loadAeState() {
+  const res = await chrome.runtime.sendMessage({ type: "GET_AES" }).catch(() => null);
+  const aes = res?.ok ? res.aes || [] : [];
+  let aeId = null;
+  if (aes.length) {
+    const stored = (await chrome.storage.sync.get("selectedAeId").catch(() => ({}))).selectedAeId;
+    aeId = aes.some(a => a.id === stored) ? stored : aes[0].id;
+  }
+  return { aes, aeId };
+}
 
-  // Group slots by date key "YYYY-MM-DD"
-  const slotsByDate = {};
-  slots.forEach(s => {
-    const key = s.start.split("T")[0];
-    if (!slotsByDate[key]) slotsByDate[key] = [];
-    slotsByDate[key].push(s);
-  });
-  const availDates = new Set(Object.keys(slotsByDate));
+function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, initialError) {
+  slotMins = slotMins || 30;
+  aes = aes || [];
+  let currentAeId = aeId || null;
+  const leadName = lead?.name || (lead?.ig_username ? `@${lead.ig_username}` : "Lead");
+  const aeName = () => aes.find(a => a.id === currentAeId)?.name || null;
+
+  // Group slots by LOCAL date key "YYYY-MM-DD" (the raw ISO string is UTC —
+  // splitting it puts evening slots under the wrong day for western reps).
+  function localKey(iso) {
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  function groupSlots(list) {
+    const m = {};
+    (list || []).forEach(s => { const k = localKey(s.start); (m[k] = m[k] || []).push(s); });
+    return m;
+  }
+  let slotsByDate = groupSlots(slots);
+  let availDates = new Set(Object.keys(slotsByDate));
 
   const overlay = document.getElementById("sp-book-overlay");
+  const modal = document.getElementById("sp-book-modal");
   const body = document.getElementById("sp-book-body");
   const titleEl = document.getElementById("sp-book-title");
   const subtitleEl = document.getElementById("sp-book-subtitle");
@@ -550,6 +572,53 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins) {
   subtitleEl.textContent = `${slotMins} min · ${esc(leadName)}`;
   document.getElementById("sp-book-close").onclick = () => { overlay.style.display = "none"; };
   overlay.onclick = (e) => { if (e.target === overlay) overlay.style.display = "none"; };
+
+  // ── AE bar — whose real availability the calendar shows ──
+  let aeBar = document.getElementById("sp-ae-bar");
+  if (!aeBar) {
+    aeBar = document.createElement("div");
+    aeBar.id = "sp-ae-bar";
+    modal.insertBefore(aeBar, body);
+  }
+  if (aes.length) {
+    aeBar.style.cssText = "display:flex;align-items:center;gap:8px;padding:10px 18px 0";
+    aeBar.innerHTML = `
+      <span style="font-size:11px;color:#475569;flex-shrink:0">Call with</span>
+      <select id="sp-ae-select" aria-label="Account Executive for this call"
+        style="flex:1;padding:6px 8px;background:#151B2E;border:1px solid #2A3554;border-radius:8px;color:#E2E8F0;font-size:12px;font-weight:600;outline:none;cursor:pointer">
+        ${aes.map(a => `<option value="${a.id}" ${a.id === currentAeId ? "selected" : ""}>${esc(a.name)}</option>`).join("")}
+      </select>`;
+    document.getElementById("sp-ae-select").onchange = (e) => switchAe(e.target.value);
+  } else {
+    aeBar.style.cssText = "display:none";
+    aeBar.innerHTML = "";
+  }
+
+  async function switchAe(id) {
+    currentAeId = id;
+    chrome.storage.sync.set({ selectedAeId: id }).catch(() => {});
+    setStep(1);
+    body.innerHTML = `<div style="padding:34px 0;text-align:center;color:#475569;font-size:12px">Checking ${esc(aeName() || "your")}${aeName() ? "’s" : ""} live availability…</div>`;
+    const res = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: id }).catch(() => null);
+    if (res?.ok) {
+      slotsByDate = groupSlots(res.slots);
+      availDates = new Set(Object.keys(slotsByDate));
+      renderCalendar();
+    } else if (res?.error === "ae_calendar_unreadable") {
+      renderUnreadable();
+    } else {
+      body.innerHTML = `<div style="padding:34px 0;text-align:center;color:#475569;font-size:12px">Couldn’t load availability — close and try again.</div>`;
+    }
+  }
+
+  function renderUnreadable() {
+    setStep(1);
+    body.innerHTML = `
+      <div style="padding:26px 8px;text-align:center">
+        <div style="font-size:13px;font-weight:700;color:#E2E8F0;margin-bottom:8px">Can’t see ${esc(aeName() || "this AE")}’s calendar</div>
+        <div style="font-size:11.5px;line-height:1.5;color:#475569">Their Google Calendar isn’t sharing free/busy with your account. Ask them to enable it, or pick a different AE above.</div>
+      </div>`;
+  }
 
   function setStep(n) {
     stepEls.forEach((s, i) => s.classList.toggle("active", i < n));
@@ -643,12 +712,13 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins) {
         <div class="sp-confirm-row"><span>📅</span><span>${DAYS[dateObj.getDay()]}, ${MONTHS_SHORT[mo-1]} ${d}</span></div>
         <div class="sp-confirm-row"><span>🕐</span><span>${fmtTime(slot.start)} · ${slotMins} min</span></div>
         <div class="sp-confirm-row"><span>👤</span><span>${esc(leadName)}</span></div>
+        ${aeName() ? `<div class="sp-confirm-row"><span>🎧</span><span>AE: ${esc(aeName())}</span></div>` : ""}
       </div>
       <div style="margin-bottom:12px">
         <input id="sp-conf-email" type="email" placeholder="Their email (optional — adds them as attendee)"
           style="width:100%;padding:9px 12px;background:#0F1420;border:1px solid #2A3554;border-radius:8px;color:#CBD5E1;font-size:12px;outline:none;box-sizing:border-box;transition:border-color .15s">
       </div>
-      <p class="sp-confirm-hint">Creates a Google Calendar event and marks this lead as Booked.</p>
+      <p class="sp-confirm-hint">Creates a Google Calendar event${aeName() ? `, invites ${esc(aeName())},` : ""} and marks this lead as Booked.</p>
       <button class="sp-confirm-btn" id="sp-conf-book">Confirm Booking</button>
       <button class="sp-back-btn" id="sp-conf-back" style="justify-content:center;margin-top:10px">‹ Change time</button>`;
 
@@ -666,8 +736,15 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins) {
         slotStart: slot.start, slotEnd: slot.end,
         leadName: lead?.name || lead?.ig_username || "Lead",
         guestEmail,
+        aeId: currentAeId || undefined,
       }).catch(() => null);
 
+      if (result?.error === "slot_taken") {
+        // The window filled up since the slot list loaded — refresh and re-pick.
+        body.innerHTML = `<div style="padding:34px 0;text-align:center;color:#fbbf24;font-size:12px">That time was just taken — refreshing availability…</div>`;
+        setTimeout(() => switchAe(currentAeId), 900);
+        return;
+      }
       if (result?.ok) {
         await chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "Booked" } }).catch(() => {});
         const [y2, mo2, d2] = dateKey.split("-").map(Number);
@@ -695,7 +772,8 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins) {
     });
   }
 
-  renderCalendar();
+  if (initialError === "ae_calendar_unreadable") renderUnreadable();
+  else renderCalendar();
   overlay.style.display = "flex";
 }
 
@@ -1082,14 +1160,20 @@ function renderOutreach() {
     }
     btn.textContent = "Checking…";
     btn.disabled = true;
-    const slotResult = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS" }).catch(() => null);
+    const aeState = await loadAeState();
+    const slotResult = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: aeState.aeId }).catch(() => null);
     btn.textContent = "📅 Book a Call";
     btn.disabled = false;
 
     if (slotResult?.ok && slotResult.slots && slotResult.slots.length) {
       // Show inline slot picker in the sidepanel outreach card
       const outreachCard = btn.closest(".outreach-card") || btn.parentElement;
-      showSidepanelSlotPicker(outreachCard, lead, slotResult.slots, slotResult.slotMins);
+      showSidepanelSlotPicker(outreachCard, lead, slotResult.slots, slotResult.slotMins, aeState.aes, aeState.aeId);
+    } else if (slotResult?.error === "ae_calendar_unreadable") {
+      // Open the picker anyway — the AE dropdown lets the rep switch to one
+      // whose calendar IS visible.
+      const outreachCard = btn.closest(".outreach-card") || btn.parentElement;
+      showSidepanelSlotPicker(outreachCard, lead, [], slotResult.slotMins || 30, aeState.aes, aeState.aeId, "ae_calendar_unreadable");
     } else if (slotResult?.needsCalendar || slotResult?.needsSignIn) {
       btn.dataset.connect = "1";
       btn.textContent = "🔗 Connect calendar";

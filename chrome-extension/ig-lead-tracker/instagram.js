@@ -1084,13 +1084,28 @@
 
   // ── Slot picker (Google Calendar integration) ──────────────────────────────
 
-  function showSlotPicker(card, b, username, lead, dashboardUrl, slots, slotMins) {
+  // AE selection shared with the sidepanel via chrome.storage.sync.
+  async function igLoadAeState() {
+    const res = await chrome.runtime.sendMessage({ type: "GET_AES" }).catch(() => null);
+    const aes = res?.ok ? res.aes || [] : [];
+    let aeId = null;
+    if (aes.length) {
+      const stored = (await chrome.storage.sync.get("selectedAeId").catch(() => ({}))).selectedAeId;
+      aeId = aes.some(a => a.id === stored) ? stored : aes[0].id;
+    }
+    return { aes, aeId };
+  }
+
+  function showSlotPicker(card, b, username, lead, dashboardUrl, slots, slotMins, aes, aeId, notice) {
     b.style.display = "none";
     slotMins = slotMins || 45;
+    aes = aes || [];
+    const currentAeId = aeId || null;
+    const currentAe = aes.find(a => a.id === currentAeId) || null;
 
     // The slots API no longer caps at 5 (that cap made the dashboard calendar
-    // look booked solid) — a week can now be 100+ open slots. Keep this quick
-    // picker short: up to 2 per day spread across the week, max 10 rows.
+    // look booked solid) — two weeks can be 100+ open slots. Keep this quick
+    // picker short: up to 2 per day spread across the window, max 10 rows.
     const byDay = {};
     (slots || []).forEach(s => {
       const key = new Date(s.start).toDateString();
@@ -1112,6 +1127,40 @@
       <span style="font-size:10px;font-weight:700;color:#93c5fd;letter-spacing:.04em">${slotMins}-min slots for <span style="color:#e2e8f0">${leadDisplayName}</span></span>
     `;
     picker.appendChild(hdr);
+
+    // AE row — the slot list below is THIS person's live availability
+    if (aes.length) {
+      const aeRow = document.createElement("div");
+      aeRow.style.cssText = "display:flex;align-items:center;gap:7px;margin-bottom:8px";
+      aeRow.innerHTML = `
+        <span style="font-size:10px;color:#6e7280;flex-shrink:0">Call with</span>
+        <select class="fb-ae-select" style="flex:1;background:#111118;border:1px solid #1e1e2e;border-radius:6px;color:#e2e8f0;font-size:11px;font-weight:600;padding:5px 7px;outline:none;cursor:pointer">
+          ${aes.map(a => `<option value="${a.id}" ${a.id === currentAeId ? "selected" : ""}>${a.name}</option>`).join("")}
+        </select>`;
+      aeRow.querySelector(".fb-ae-select").addEventListener("change", async (e) => {
+        const id = e.target.value;
+        chrome.storage.sync.set({ selectedAeId: id }).catch(() => {});
+        e.target.disabled = true;
+        const res = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: id }).catch(() => null);
+        picker.remove();
+        if (res?.ok) {
+          showSlotPicker(card, b, username, lead, dashboardUrl, res.slots, res.slotMins, aes, id);
+        } else if (res?.error === "ae_calendar_unreadable") {
+          showSlotPicker(card, b, username, lead, dashboardUrl, [], slotMins, aes, id,
+            "Can't see this AE's calendar — ask them to share free/busy, or pick another.");
+        } else {
+          b.style.display = "";
+        }
+      });
+      picker.appendChild(aeRow);
+    }
+
+    if (notice) {
+      const n = document.createElement("div");
+      n.style.cssText = "font-size:10px;color:#fbbf24;margin-bottom:8px;line-height:1.4";
+      n.textContent = notice;
+      picker.appendChild(n);
+    }
 
     // Slot list — pre-select first 3
     const selected = new Set(slots.slice(0, 3).map(s => s.start));
@@ -1172,7 +1221,7 @@
       const og = document.querySelector('meta[property="og:title"]')?.content || "";
       const m = og.match(/^(.+?)\s*\(@/);
       const firstName = (m ? m[1].trim() : "").split(" ")[0] || username;
-      const dmText = `Hey ${firstName} — happy to walk through the dashboard, no pitch, just ${slotMins} min to show you what it looks like with your numbers.\n\nI'm open ${slotText} — any of those work?`;
+      const dmText = `Hey ${firstName} — happy to walk through the dashboard, no pitch, just ${slotMins} min to show you what it looks like with your numbers.\n\n${currentAe ? "We're open" : "I'm open"} ${slotText} — any of those work?`;
       picker.remove();
       b.style.display = "";
       showDmPreview(card, b, username, null, {
@@ -1252,14 +1301,19 @@
         const guestEmail = emailInput.value.trim() || undefined;
         createBtn.textContent = "Creating…";
         createBtn.disabled = true;
-        const result = await chrome.runtime.sendMessage({ type: "CREATE_CALENDAR_EVENT", slotStart: slot.start, slotEnd: slot.end, leadName, guestEmail }).catch(() => null);
+        const result = await chrome.runtime.sendMessage({ type: "CREATE_CALENDAR_EVENT", slotStart: slot.start, slotEnd: slot.end, leadName, guestEmail, aeId: currentAeId || undefined }).catch(() => null);
         if (result?.ok) {
           form.innerHTML = "";
           const ok = document.createElement("div");
-          ok.textContent = "✓ Event created!";
+          ok.textContent = currentAe ? `✓ Event created — ${currentAe.name} invited!` : "✓ Event created!";
           ok.style.cssText = "color:#4ade80;font-size:12px;font-weight:600;text-align:center;padding:10px 8px";
           form.appendChild(ok);
           setTimeout(() => { picker.remove(); }, 1500);
+        } else if (result?.error === "slot_taken") {
+          createBtn.textContent = "✗ Time just got taken — pick another";
+          createBtn.style.borderColor = "#7f1d1d";
+          createBtn.style.color = "#ef4444";
+          createBtn.disabled = false;
         } else {
           createBtn.textContent = "✗ Failed — try again";
           createBtn.style.borderColor = "#7f1d1d";
@@ -2023,11 +2077,15 @@
         }
         savedBookCalBtn.textContent = "Checking…";
         savedBookCalBtn.disabled = true;
-        const result = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS" }).catch(() => null);
+        const aeState = await igLoadAeState();
+        const result = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: aeState.aeId }).catch(() => null);
         savedBookCalBtn.textContent = "📅 Book a Call";
         savedBookCalBtn.disabled = false;
         if (result?.ok && result.slots && result.slots.length) {
-          showSlotPicker(card, b, username, lead, dashboardUrl, result.slots, result.slotMins);
+          showSlotPicker(card, b, username, lead, dashboardUrl, result.slots, result.slotMins, aeState.aes, aeState.aeId);
+        } else if (result?.error === "ae_calendar_unreadable") {
+          showSlotPicker(card, b, username, lead, dashboardUrl, [], null, aeState.aes, aeState.aeId,
+            "Can't see this AE's calendar — ask them to share free/busy, or pick another.");
         } else if (result?.needsCalendar || result?.needsSignIn) {
           savedBookCalBtn.dataset.connect = "1";
           savedBookCalBtn.textContent = "🔗 Connect calendar";
@@ -2323,10 +2381,14 @@
         return;
       }
       bookCalBtn.textContent = "Checking…"; bookCalBtn.disabled = true;
-      const result = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS" }).catch(() => null);
+      const aeState = await igLoadAeState();
+      const result = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: aeState.aeId }).catch(() => null);
       bookCalBtn.textContent = "📅 Book a Call"; bookCalBtn.disabled = false;
       if (result?.ok && result.slots && result.slots.length) {
-        showSlotPicker(card, b, username, lead, dashboardUrl, result.slots, result.slotMins);
+        showSlotPicker(card, b, username, lead, dashboardUrl, result.slots, result.slotMins, aeState.aes, aeState.aeId);
+      } else if (result?.error === "ae_calendar_unreadable") {
+        showSlotPicker(card, b, username, lead, dashboardUrl, [], null, aeState.aes, aeState.aeId,
+          "Can't see this AE's calendar — ask them to share free/busy, or pick another.");
       } else if (result?.needsCalendar || result?.needsSignIn) {
         bookCalBtn.dataset.connect = "1";
         bookCalBtn.textContent = "🔗 Connect calendar";
