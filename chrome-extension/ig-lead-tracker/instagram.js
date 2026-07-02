@@ -1096,7 +1096,11 @@
     return { aes, aeId };
   }
 
-  function showSlotPicker(card, b, username, lead, dashboardUrl, slots, slotMins, aes, aeId, notice) {
+  // mode "avail" = pick up to 3 times to OFFER in a DM; mode "book" = pick the
+  // ONE confirmed time and create the event. Same list, different job.
+  function showSlotPicker(card, b, username, lead, dashboardUrl, slots, slotMins, aes, aeId, notice, mode) {
+    mode = mode || "avail";
+    const booking = mode === "book";
     b.style.display = "none";
     slotMins = slotMins || 45;
     aes = aes || [];
@@ -1144,10 +1148,10 @@
         const res = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: id }).catch(() => null);
         picker.remove();
         if (res?.ok) {
-          showSlotPicker(card, b, username, lead, dashboardUrl, res.slots, res.slotMins, aes, id);
+          showSlotPicker(card, b, username, lead, dashboardUrl, res.slots, res.slotMins, aes, id, null, mode);
         } else if (res?.error === "ae_calendar_unreadable") {
           showSlotPicker(card, b, username, lead, dashboardUrl, [], slotMins, aes, id,
-            "Can't see this AE's calendar — ask them to share free/busy, or pick another.");
+            "Can't see this AE's calendar — ask them to share free/busy, or pick another.", mode);
         } else {
           b.style.display = "";
         }
@@ -1162,37 +1166,48 @@
       picker.appendChild(n);
     }
 
-    // Slot list — pre-select first 3
-    const selected = new Set(slots.slice(0, 3).map(s => s.start));
+    // Slot list — avail: checkboxes, pre-select first 3; book: radio, pick one
+    const selected = new Set(slots.slice(0, booking ? 1 : 3).map(s => s.start));
     const listEl = document.createElement("div");
     listEl.style.cssText = "display:flex;flex-direction:column;gap:4px;margin-bottom:10px";
+    const rowEls = [];
+
+    function paintRow(row, isSelected) {
+      row.style.background = isSelected ? "#0e1e38" : "#111118";
+      row.style.borderColor = isSelected ? "#1d4ed8" : "#1e1e2e";
+      const cb = row.querySelector(".slot-cb");
+      cb.style.background = isSelected ? "#4285F4" : "transparent";
+      cb.style.borderColor = isSelected ? "#4285F4" : "#2a2a3a";
+      cb.textContent = isSelected ? "✓" : "";
+      row.querySelector(".slot-time").style.color = isSelected ? "#e2e8f0" : "#6e7280";
+    }
 
     slots.forEach(slot => {
       const row = document.createElement("div");
       const isSelected = selected.has(slot.start);
       row.style.cssText = `display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;cursor:pointer;background:${isSelected ? "#0e1e38" : "#111118"};border:1px solid ${isSelected ? "#1d4ed8" : "#1e1e2e"}`;
       row.innerHTML = `
-        <span class="slot-cb" style="width:13px;height:13px;border-radius:3px;border:1px solid ${isSelected ? "#4285F4" : "#2a2a3a"};background:${isSelected ? "#4285F4" : "transparent"};display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:9px;color:#fff">${isSelected ? "✓" : ""}</span>
-        <span style="font-size:11px;color:${isSelected ? "#e2e8f0" : "#6e7280"};font-variant-numeric:tabular-nums">${calFormatSlot(slot.start)}</span>
+        <span class="slot-cb" style="width:13px;height:13px;border-radius:${booking ? "50%" : "3px"};border:1px solid ${isSelected ? "#4285F4" : "#2a2a3a"};background:${isSelected ? "#4285F4" : "transparent"};display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:9px;color:#fff">${isSelected ? "✓" : ""}</span>
+        <span class="slot-time" style="font-size:11px;color:${isSelected ? "#e2e8f0" : "#6e7280"};font-variant-numeric:tabular-nums">${calFormatSlot(slot.start)}</span>
       `;
       row.addEventListener("click", () => {
+        if (booking) {
+          // Radio behavior — exactly one confirmed time
+          selected.clear();
+          selected.add(slot.start);
+          rowEls.forEach(([el, s]) => paintRow(el, selected.has(s.start)));
+          return;
+        }
         if (selected.has(slot.start)) {
           selected.delete(slot.start);
-          row.style.background = "#111118";
-          row.style.borderColor = "#1e1e2e";
-          row.querySelector(".slot-cb").style.background = "transparent";
-          row.querySelector(".slot-cb").style.borderColor = "#2a2a3a";
-          row.querySelector(".slot-cb").textContent = "";
+          paintRow(row, false);
         } else {
           if (selected.size >= 3) return;
           selected.add(slot.start);
-          row.style.background = "#0e1e38";
-          row.style.borderColor = "#1d4ed8";
-          row.querySelector(".slot-cb").style.background = "#4285F4";
-          row.querySelector(".slot-cb").style.borderColor = "#4285F4";
-          row.querySelector(".slot-cb").textContent = "✓";
+          paintRow(row, true);
         }
       });
+      rowEls.push([row, slot]);
       listEl.appendChild(row);
     });
     picker.appendChild(listEl);
@@ -1200,7 +1215,7 @@
     // Hint
     const hint = document.createElement("div");
     hint.style.cssText = "font-size:9px;color:#444;margin-bottom:8px;text-align:center";
-    hint.textContent = "Select up to 3 slots";
+    hint.textContent = booking ? "Tap the time they confirmed" : "Select up to 3 slots to offer";
     picker.appendChild(hint);
 
     // Button row
@@ -1333,8 +1348,13 @@
     });
 
     btnRow.appendChild(backBtn);
-    btnRow.appendChild(insertBtn);
-    btnRow.appendChild(bookEventBtn);
+    if (booking) {
+      bookEventBtn.style.flex = "2";
+      bookEventBtn.textContent = "📅 Book →";
+      btnRow.appendChild(bookEventBtn);
+    } else {
+      btnRow.appendChild(insertBtn);
+    }
     picker.appendChild(btnRow);
     card.appendChild(picker);
   }
@@ -2063,49 +2083,55 @@
         }, 4000);
       });
 
-      // 📅 Book a Call — uses Google Calendar slots if connected, else falls back to script DM
-      const savedBookCalBtn = document.createElement("button");
-      savedBookCalBtn.textContent = "📅 Book a Call";
-      savedBookCalBtn.style.cssText = "flex:1;background:#0f2540;border:1px solid #1d4ed8;border-radius:6px;color:#93c5fd;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
-      savedBookCalBtn.addEventListener("click", async () => {
-        if (savedBookCalBtn.dataset.connect) {
-          // Second click after "Connect calendar" — re-sign-in upgrades the Google scope
-          delete savedBookCalBtn.dataset.connect;
-          savedBookCalBtn.textContent = "📅 Book a Call";
-          chrome.runtime.sendMessage({ type: "SIGN_IN" }).catch(() => {});
-          return;
-        }
-        savedBookCalBtn.textContent = "Checking…";
-        savedBookCalBtn.disabled = true;
-        const aeState = await igLoadAeState();
-        const result = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: aeState.aeId }).catch(() => null);
-        savedBookCalBtn.textContent = "📅 Book a Call";
-        savedBookCalBtn.disabled = false;
-        if (result?.ok && result.slots && result.slots.length) {
-          showSlotPicker(card, b, username, lead, dashboardUrl, result.slots, result.slotMins, aeState.aes, aeState.aeId);
-        } else if (result?.error === "ae_calendar_unreadable") {
-          showSlotPicker(card, b, username, lead, dashboardUrl, [], null, aeState.aes, aeState.aeId,
-            "Can't see this AE's calendar — ask them to share free/busy, or pick another.");
-        } else if (result?.needsCalendar || result?.needsSignIn) {
-          savedBookCalBtn.dataset.connect = "1";
-          savedBookCalBtn.textContent = "🔗 Connect calendar";
-        } else {
-          const calScript = calendarUrl
-            ? `Hey [Name] — happy to walk you through the dashboard, no pitch, just 15 min to show you what it looks like with your numbers.\n\nHere's my link: ${calendarUrl} — grab whatever works and I'll send context beforehand.`
-            : `Hey [Name] — happy to walk you through the dashboard, no pitch, just 15 min to show you what it looks like with your numbers. lmk if that makes sense.`;
-          showDmPreview(card, b, username, null, {
-            lead,
-            leadId: lead.id,
-            channel: "ig_fanbasis",
-            dashboardUrl,
-            bookingScript: calScript,
-            afterSend: () => {
-              chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "Call Offered" } }).catch(() => {});
-              setTimeout(() => updateCardForProfile(), 500);
-            },
-          });
-        }
-      });
+      // 🕐 Times (offer availability in a DM) + 📅 Book (they confirmed — create
+      // the event). Same slot fetch, different picker mode.
+      const makeSavedCalBtn = (label, mode) => {
+        const btn = document.createElement("button");
+        btn.textContent = label;
+        btn.style.cssText = "flex:1;background:#0f2540;border:1px solid #1d4ed8;border-radius:6px;color:#93c5fd;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
+        btn.addEventListener("click", async () => {
+          if (btn.dataset.connect) {
+            // Second click after "Connect calendar" — re-sign-in upgrades the Google scope
+            delete btn.dataset.connect;
+            btn.textContent = label;
+            chrome.runtime.sendMessage({ type: "SIGN_IN" }).catch(() => {});
+            return;
+          }
+          btn.textContent = "Checking…";
+          btn.disabled = true;
+          const aeState = await igLoadAeState();
+          const result = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: aeState.aeId }).catch(() => null);
+          btn.textContent = label;
+          btn.disabled = false;
+          if (result?.ok && result.slots && result.slots.length) {
+            showSlotPicker(card, b, username, lead, dashboardUrl, result.slots, result.slotMins, aeState.aes, aeState.aeId, null, mode);
+          } else if (result?.error === "ae_calendar_unreadable") {
+            showSlotPicker(card, b, username, lead, dashboardUrl, [], null, aeState.aes, aeState.aeId,
+              "Can't see this AE's calendar — ask them to share free/busy, or pick another.", mode);
+          } else if (result?.needsCalendar || result?.needsSignIn) {
+            btn.dataset.connect = "1";
+            btn.textContent = "🔗 Connect calendar";
+          } else {
+            const calScript = calendarUrl
+              ? `Hey [Name] — happy to walk you through the dashboard, no pitch, just 15 min to show you what it looks like with your numbers.\n\nHere's my link: ${calendarUrl} — grab whatever works and I'll send context beforehand.`
+              : `Hey [Name] — happy to walk you through the dashboard, no pitch, just 15 min to show you what it looks like with your numbers. lmk if that makes sense.`;
+            showDmPreview(card, b, username, null, {
+              lead,
+              leadId: lead.id,
+              channel: "ig_fanbasis",
+              dashboardUrl,
+              bookingScript: calScript,
+              afterSend: () => {
+                chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "Call Offered" } }).catch(() => {});
+                setTimeout(() => updateCardForProfile(), 500);
+              },
+            });
+          }
+        });
+        return btn;
+      };
+      const savedAvailBtn = makeSavedCalBtn("🕐 Times", "avail");
+      const savedBookCalBtn = makeSavedCalBtn("📅 Book", "book");
 
       // ✓ Mark Sent — quick-mark without opening DM composer
       const savedDmSentBtn = document.createElement("button");
@@ -2120,6 +2146,7 @@
       });
 
       savedActions.appendChild(savedDqBtn);
+      savedActions.appendChild(savedAvailBtn);
       savedActions.appendChild(savedBookCalBtn);
       savedActions.appendChild(savedDmSentBtn);
       renderSmartDmBtn(card, b, username, lead, suggestion ? suggestion.text : null, dashboardUrl);
@@ -2369,40 +2396,45 @@
     const actions = document.createElement("div");
     actions.style.cssText = "display:flex;gap:5px";
 
-    const bookCalBtn = document.createElement("button");
-    bookCalBtn.textContent = "📅 Book a Call";
-    bookCalBtn.style.cssText = "flex:1;background:#0f2540;border:1px solid #1d4ed8;border-radius:6px;color:#93c5fd;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
-    bookCalBtn.addEventListener("click", async () => {
-      if (bookCalBtn.dataset.connect) {
-        // Second click after "Connect calendar" — re-sign-in upgrades the Google scope
-        delete bookCalBtn.dataset.connect;
-        bookCalBtn.textContent = "📅 Book a Call";
-        chrome.runtime.sendMessage({ type: "SIGN_IN" }).catch(() => {});
-        return;
-      }
-      bookCalBtn.textContent = "Checking…"; bookCalBtn.disabled = true;
-      const aeState = await igLoadAeState();
-      const result = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: aeState.aeId }).catch(() => null);
-      bookCalBtn.textContent = "📅 Book a Call"; bookCalBtn.disabled = false;
-      if (result?.ok && result.slots && result.slots.length) {
-        showSlotPicker(card, b, username, lead, dashboardUrl, result.slots, result.slotMins, aeState.aes, aeState.aeId);
-      } else if (result?.error === "ae_calendar_unreadable") {
-        showSlotPicker(card, b, username, lead, dashboardUrl, [], null, aeState.aes, aeState.aeId,
-          "Can't see this AE's calendar — ask them to share free/busy, or pick another.");
-      } else if (result?.needsCalendar || result?.needsSignIn) {
-        bookCalBtn.dataset.connect = "1";
-        bookCalBtn.textContent = "🔗 Connect calendar";
-      } else {
-        const calScript = calendarUrl
-          ? `Hey [Name] — happy to walk you through the dashboard, no pitch, just 15 min to show you what it looks like with your numbers.\n\nHere's my link: ${calendarUrl} — grab whatever works and I'll send context beforehand.`
-          : `Hey [Name] — happy to walk you through the dashboard, no pitch, just 15 min to show you what it looks like with your numbers. lmk if that makes sense.`;
-        showDmPreview(card, b, username, null, { lead, leadId: lead.id, channel: "ig_fanbasis", dashboardUrl, bookingScript: calScript, afterSend: () => {
-          chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "Call Offered" } }).catch(() => {});
-          setTimeout(() => updateCardForProfile(), 500);
-        }});
-      }
-    });
-    actions.appendChild(bookCalBtn);
+    // 🕐 Times (offer availability) + 📅 Book (create the confirmed event)
+    const makeCalBtn = (label, mode) => {
+      const btn = document.createElement("button");
+      btn.textContent = label;
+      btn.style.cssText = "flex:1;background:#0f2540;border:1px solid #1d4ed8;border-radius:6px;color:#93c5fd;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
+      btn.addEventListener("click", async () => {
+        if (btn.dataset.connect) {
+          // Second click after "Connect calendar" — re-sign-in upgrades the Google scope
+          delete btn.dataset.connect;
+          btn.textContent = label;
+          chrome.runtime.sendMessage({ type: "SIGN_IN" }).catch(() => {});
+          return;
+        }
+        btn.textContent = "Checking…"; btn.disabled = true;
+        const aeState = await igLoadAeState();
+        const result = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: aeState.aeId }).catch(() => null);
+        btn.textContent = label; btn.disabled = false;
+        if (result?.ok && result.slots && result.slots.length) {
+          showSlotPicker(card, b, username, lead, dashboardUrl, result.slots, result.slotMins, aeState.aes, aeState.aeId, null, mode);
+        } else if (result?.error === "ae_calendar_unreadable") {
+          showSlotPicker(card, b, username, lead, dashboardUrl, [], null, aeState.aes, aeState.aeId,
+            "Can't see this AE's calendar — ask them to share free/busy, or pick another.", mode);
+        } else if (result?.needsCalendar || result?.needsSignIn) {
+          btn.dataset.connect = "1";
+          btn.textContent = "🔗 Connect calendar";
+        } else {
+          const calScript = calendarUrl
+            ? `Hey [Name] — happy to walk you through the dashboard, no pitch, just 15 min to show you what it looks like with your numbers.\n\nHere's my link: ${calendarUrl} — grab whatever works and I'll send context beforehand.`
+            : `Hey [Name] — happy to walk you through the dashboard, no pitch, just 15 min to show you what it looks like with your numbers. lmk if that makes sense.`;
+          showDmPreview(card, b, username, null, { lead, leadId: lead.id, channel: "ig_fanbasis", dashboardUrl, bookingScript: calScript, afterSend: () => {
+            chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "Call Offered" } }).catch(() => {});
+            setTimeout(() => updateCardForProfile(), 500);
+          }});
+        }
+      });
+      return btn;
+    };
+    actions.appendChild(makeCalBtn("🕐 Times", "avail"));
+    actions.appendChild(makeCalBtn("📅 Book", "book"));
 
     const vmScripts = (typeof SCRIPTS !== "undefined" && SCRIPTS["Voice Messages"]) || [];
     if (vmScripts.length) {

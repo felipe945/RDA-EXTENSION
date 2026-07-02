@@ -49,7 +49,7 @@ function OverviewTab({ lead: leadRaw }: { lead: Lead }) {
   const stages = isSales ? SALES_STAGES : CSM_STAGES;
   const db = getSupabase();
   const [notesValue, setNotesValue] = useState(lead.notes ?? "");
-  const [showBookCall, setShowBookCall] = useState(false);
+  const [bookMode, setBookMode] = useState<"book" | "availability" | null>(null);
 
   async function updateField(field: string, value: string) {
     await db
@@ -155,21 +155,33 @@ function OverviewTab({ lead: leadRaw }: { lead: Lead }) {
         />
       )}
 
-      {/* Book a Call CTA */}
-      <button
-        onClick={() => setShowBookCall(true)}
-        className="w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-all"
-        style={{ background: 'linear-gradient(135deg, #FF3A69, #c0294d)', color: 'white', boxShadow: '0 4px 16px rgba(255,58,105,0.25)' }}
-        onMouseEnter={e => { (e.currentTarget).style.boxShadow = '0 6px 24px rgba(255,58,105,0.4)'; (e.currentTarget).style.transform = 'translateY(-1px)'; }}
-        onMouseLeave={e => { (e.currentTarget).style.boxShadow = '0 4px 16px rgba(255,58,105,0.25)'; (e.currentTarget).style.transform = 'translateY(0)'; }}
-      >
-        📞 Book a Call
-      </button>
+      {/* Calendar CTAs — glance/offer times vs actually book */}
+      <div className="flex gap-2">
+        <button
+          onClick={() => setBookMode("availability")}
+          className="flex-1 py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-all"
+          style={{ background: '#151B2E', border: '1px solid #2A3554', color: '#94A3B8' }}
+          onMouseEnter={e => { (e.currentTarget).style.borderColor = '#3B4A6E'; (e.currentTarget).style.color = '#E2E8F0'; }}
+          onMouseLeave={e => { (e.currentTarget).style.borderColor = '#2A3554'; (e.currentTarget).style.color = '#94A3B8'; }}
+        >
+          🕐 See Availability
+        </button>
+        <button
+          onClick={() => setBookMode("book")}
+          className="flex-1 py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-all"
+          style={{ background: 'linear-gradient(135deg, #FF3A69, #c0294d)', color: 'white', boxShadow: '0 4px 16px rgba(255,58,105,0.25)' }}
+          onMouseEnter={e => { (e.currentTarget).style.boxShadow = '0 6px 24px rgba(255,58,105,0.4)'; (e.currentTarget).style.transform = 'translateY(-1px)'; }}
+          onMouseLeave={e => { (e.currentTarget).style.boxShadow = '0 4px 16px rgba(255,58,105,0.25)'; (e.currentTarget).style.transform = 'translateY(0)'; }}
+        >
+          📞 Book a Call
+        </button>
+      </div>
 
-      {showBookCall && (
+      {bookMode && (
         <BookCallModal
           lead={lead}
-          onClose={() => setShowBookCall(false)}
+          mode={bookMode}
+          onClose={() => setBookMode(null)}
         />
       )}
 

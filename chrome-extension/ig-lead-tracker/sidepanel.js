@@ -536,12 +536,17 @@ async function loadAeState() {
   return { aes, aeId };
 }
 
-function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, initialError) {
+// mode "book" (default) = full booking flow; mode "avail" = look-don't-book:
+// pick up to 3 open times (across days) and copy them / a ready DM to offer.
+function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, initialError, mode) {
+  mode = mode || "book";
+  const offering = mode === "avail";
   slotMins = slotMins || 30;
   aes = aes || [];
   let currentAeId = aeId || null;
   const leadName = lead?.name || (lead?.ig_username ? `@${lead.ig_username}` : "Lead");
   const aeName = () => aes.find(a => a.id === currentAeId)?.name || null;
+  const offerPicks = []; // availability mode: slots chosen to offer (max 3)
 
   // Group slots by LOCAL date key "YYYY-MM-DD" (the raw ISO string is UTC —
   // splitting it puts evening slots under the wrong day for western reps).
@@ -568,8 +573,8 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
     document.getElementById("sp-step-3"),
   ];
 
-  titleEl.textContent = `Book a Call`;
-  subtitleEl.textContent = `${slotMins} min · ${esc(leadName)}`;
+  titleEl.textContent = offering ? "See Availability" : "Book a Call";
+  subtitleEl.textContent = offering ? `offer times · ${esc(leadName)}` : `${slotMins} min · ${esc(leadName)}`;
   document.getElementById("sp-book-close").onclick = () => { overlay.style.display = "none"; };
   overlay.onclick = (e) => { if (e.target === overlay) overlay.style.display = "none"; };
 
@@ -597,6 +602,7 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
   async function switchAe(id) {
     currentAeId = id;
     chrome.storage.sync.set({ selectedAeId: id }).catch(() => {});
+    offerPicks.length = 0; // picked times belong to the previous AE's calendar
     setStep(1);
     body.innerHTML = `<div style="padding:34px 0;text-align:center;color:#475569;font-size:12px">Checking ${esc(aeName() || "your")}${aeName() ? "’s" : ""} live availability…</div>`;
     const res = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: id }).catch(() => null);
@@ -638,6 +644,54 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
   const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
+  // ── Availability mode: offer-times text + footer ──
+  function fmtOffer(iso) {
+    const d = new Date(iso);
+    return `${DAYS[d.getDay()]} ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()} at ${fmtTime(iso)}`;
+  }
+  function offerTimesText() {
+    const t = offerPicks.slice().sort((a, b) => new Date(a.start) - new Date(b.start)).map(s => fmtOffer(s.start));
+    if (t.length <= 1) return t[0] || "";
+    if (t.length === 2) return `${t[0]} or ${t[1]}`;
+    return `${t.slice(0, -1).join(", ")}, or ${t[t.length - 1]}`;
+  }
+  function offerDmText() {
+    const first = (lead?.name || "").trim().split(/\s+/)[0];
+    return `Hey${first ? ` ${first}` : ""} — happy to walk through the dashboard, no pitch, just ${slotMins} min to show you what it looks like with your numbers.\n\n${aeName() ? "We're" : "I'm"} open ${offerTimesText()} — any of those work?`;
+  }
+  function offerFooterHtml() {
+    if (!offering) return "";
+    if (!offerPicks.length) {
+      return `<div style="margin-top:12px;padding-top:10px;border-top:1px solid #1A2235;font-size:11px;color:#475569;text-align:center">Pick up to 3 times to offer — across any days.</div>`;
+    }
+    return `
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid #1A2235">
+        <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px">
+          ${offerPicks.map((p, i) => `<button class="sp-offer-chip" data-i="${i}" title="Remove" style="padding:4px 8px;border-radius:7px;font-size:10.5px;font-weight:600;background:rgba(255,58,105,0.1);border:1px solid rgba(255,58,105,0.35);color:#FF7A9C;cursor:pointer">${fmtOffer(p.start)} ✕</button>`).join("")}
+        </div>
+        <div style="display:flex;gap:7px">
+          <button id="sp-copy-times" style="flex:1;padding:9px;border-radius:9px;font-size:11px;font-weight:700;background:#151B2E;border:1px solid #2A3554;color:#94A3B8;cursor:pointer">Copy times</button>
+          <button id="sp-copy-offer-dm" style="flex:1;padding:9px;border-radius:9px;font-size:11px;font-weight:700;background:#FF3A69;border:none;color:#fff;cursor:pointer">Copy DM</button>
+        </div>
+      </div>`;
+  }
+  function bindOfferFooter(rerender) {
+    if (!offering) return;
+    body.querySelectorAll(".sp-offer-chip").forEach(chip => {
+      chip.addEventListener("click", () => { offerPicks.splice(parseInt(chip.dataset.i, 10), 1); rerender(); });
+    });
+    const ct = document.getElementById("sp-copy-times");
+    const cd = document.getElementById("sp-copy-offer-dm");
+    if (ct) ct.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(offerTimesText()).catch(() => {});
+      ct.textContent = "✓ Copied!"; ct.style.color = "#4ade80";
+    });
+    if (cd) cd.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(offerDmText()).catch(() => {});
+      cd.textContent = "✓ Copied!";
+    });
+  }
+
   function renderCalendar() {
     setStep(1);
     const firstDay = new Date(viewYear, viewMonth, 1).getDay();
@@ -663,7 +717,7 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
       const dot = hasSlots ? `<span style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);width:4px;height:4px;border-radius:50%;background:#FF3A69"></span>` : "";
       html += `<button class="${cls}" data-key="${key}" style="position:relative" ${!hasSlots ? "disabled" : ""}>${day}${dot}</button>`;
     }
-    html += `</div>`;
+    html += `</div>` + offerFooterHtml();
     body.innerHTML = html;
 
     document.getElementById("sp-cal-prev").onclick = () => {
@@ -677,6 +731,7 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
     body.querySelectorAll(".sp-cal-day:not(.disabled)").forEach(btn => {
       btn.addEventListener("click", () => renderSlots(btn.dataset.key));
     });
+    bindOfferFooter(renderCalendar);
   }
 
   function renderSlots(dateKey) {
@@ -684,22 +739,33 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
     const [y, mo, d] = dateKey.split("-").map(Number);
     const dateObj = new Date(y, mo - 1, d);
     const daySlots = slotsByDate[dateKey] || [];
+    const isPicked = (s) => offerPicks.some(p => p.start === s.start);
 
     body.innerHTML = `
       <button class="sp-back-btn" id="sp-slots-back">‹ Back</button>
       <div style="font-size:13px;font-weight:700;color:#E2E8F0;margin-bottom:14px">${DAYS[dateObj.getDay()]}, ${MONTHS_SHORT[mo-1]} ${d}</div>
       <div class="sp-slots-grid">
-        ${daySlots.map((s, i) => `<button class="sp-slot-btn" data-i="${i}">${fmtTime(s.start)}</button>`).join("")}
-      </div>`;
+        ${daySlots.map((s, i) => `<button class="sp-slot-btn${offering && isPicked(s) ? " selected" : ""}" data-i="${i}">${fmtTime(s.start)}</button>`).join("")}
+      </div>` + offerFooterHtml();
 
     document.getElementById("sp-slots-back").onclick = renderCalendar;
     body.querySelectorAll(".sp-slot-btn").forEach(btn => {
       btn.addEventListener("click", () => {
+        const slot = daySlots[parseInt(btn.dataset.i)];
+        if (offering) {
+          // Toggle this time in the offer list (max 3, can span days)
+          const at = offerPicks.findIndex(p => p.start === slot.start);
+          if (at >= 0) offerPicks.splice(at, 1);
+          else if (offerPicks.length < 3) offerPicks.push(slot);
+          renderSlots(dateKey);
+          return;
+        }
         body.querySelectorAll(".sp-slot-btn").forEach(b => b.classList.remove("selected"));
         btn.classList.add("selected");
         setTimeout(() => renderConfirm(daySlots[parseInt(btn.dataset.i)], dateKey), 160);
       });
     });
+    bindOfferFooter(() => renderSlots(dateKey));
   }
 
   function renderConfirm(slot, dateKey) {
@@ -937,7 +1003,8 @@ function renderOutreach() {
       </div>
       <div style="display:flex;gap:5px;margin-top:5px">
         <button style="flex:1;background:#161616;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:6px;cursor:pointer" id="dqBtn" data-id="${esc(lead.id)}">✗ DQ</button>
-        <button style="flex:1;background:#0f2540;border:1px solid #1d4ed8;border-radius:6px;color:#93c5fd;font-size:11px;font-weight:600;padding:6px;cursor:pointer" id="bookCalBtn" data-id="${esc(lead.id)}">📅 Book a Call</button>
+        <button style="flex:1;background:#151B2E;border:1px solid #2A3554;border-radius:6px;color:#94A3B8;font-size:11px;font-weight:600;padding:6px;cursor:pointer" id="availCalBtn" data-id="${esc(lead.id)}">🕐 Times</button>
+        <button style="flex:1;background:#0f2540;border:1px solid #1d4ed8;border-radius:6px;color:#93c5fd;font-size:11px;font-weight:600;padding:6px;cursor:pointer" id="bookCalBtn" data-id="${esc(lead.id)}">📅 Book</button>
       </div>
 
       <div style="display:flex;align-items:center;gap:6px;margin-top:5px">
@@ -1148,47 +1215,52 @@ function renderOutreach() {
   });
 
   // Book a Call — server-side slots via the dashboard; else open calendar URL
-  document.getElementById("bookCalBtn")?.addEventListener("click", async () => {
-    const btn = document.getElementById("bookCalBtn");
-    if (btn.dataset.connect) {
-      // Second click after "Connect calendar" — re-sign-in upgrades the Google scope
-      delete btn.dataset.connect;
-      btn.textContent = "📅 Book a Call";
-      await chrome.runtime.sendMessage({ type: "SIGN_IN" }).catch(() => {});
-      await loadData();
-      return;
-    }
-    btn.textContent = "Checking…";
-    btn.disabled = true;
-    const aeState = await loadAeState();
-    const slotResult = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: aeState.aeId }).catch(() => null);
-    btn.textContent = "📅 Book a Call";
-    btn.disabled = false;
-
-    if (slotResult?.ok && slotResult.slots && slotResult.slots.length) {
-      // Show inline slot picker in the sidepanel outreach card
-      const outreachCard = btn.closest(".outreach-card") || btn.parentElement;
-      showSidepanelSlotPicker(outreachCard, lead, slotResult.slots, slotResult.slotMins, aeState.aes, aeState.aeId);
-    } else if (slotResult?.error === "ae_calendar_unreadable") {
-      // Open the picker anyway — the AE dropdown lets the rep switch to one
-      // whose calendar IS visible.
-      const outreachCard = btn.closest(".outreach-card") || btn.parentElement;
-      showSidepanelSlotPicker(outreachCard, lead, [], slotResult.slotMins || 30, aeState.aes, aeState.aeId, "ae_calendar_unreadable");
-    } else if (slotResult?.needsCalendar || slotResult?.needsSignIn) {
-      btn.dataset.connect = "1";
-      btn.textContent = "🔗 Connect calendar";
-    } else {
-      // Fallback: open calendar URL if configured — only advance stage if something actually opened
-      if (calendarUrl) {
-        window.open(calendarUrl, "_blank");
-        await chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "Call Offered" } }).catch(() => null);
+  // 🕐 Times = offer availability (copy times/DM); 📅 Book = create the event.
+  const wireCalBtn = (id, label, mode) => {
+    document.getElementById(id)?.addEventListener("click", async () => {
+      const btn = document.getElementById(id);
+      if (btn.dataset.connect) {
+        // Second click after "Connect calendar" — re-sign-in upgrades the Google scope
+        delete btn.dataset.connect;
+        btn.textContent = label;
+        await chrome.runtime.sendMessage({ type: "SIGN_IN" }).catch(() => {});
         await loadData();
-      } else {
-        btn.textContent = "⚠ No calendar connected";
-        setTimeout(() => { btn.textContent = "📅 Book a Call"; }, 2000);
+        return;
       }
-    }
-  });
+      btn.textContent = "Checking…";
+      btn.disabled = true;
+      const aeState = await loadAeState();
+      const slotResult = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: aeState.aeId }).catch(() => null);
+      btn.textContent = label;
+      btn.disabled = false;
+
+      if (slotResult?.ok && slotResult.slots && slotResult.slots.length) {
+        // Show inline slot picker in the sidepanel outreach card
+        const outreachCard = btn.closest(".outreach-card") || btn.parentElement;
+        showSidepanelSlotPicker(outreachCard, lead, slotResult.slots, slotResult.slotMins, aeState.aes, aeState.aeId, null, mode);
+      } else if (slotResult?.error === "ae_calendar_unreadable") {
+        // Open the picker anyway — the AE dropdown lets the rep switch to one
+        // whose calendar IS visible.
+        const outreachCard = btn.closest(".outreach-card") || btn.parentElement;
+        showSidepanelSlotPicker(outreachCard, lead, [], slotResult.slotMins || 30, aeState.aes, aeState.aeId, "ae_calendar_unreadable", mode);
+      } else if (slotResult?.needsCalendar || slotResult?.needsSignIn) {
+        btn.dataset.connect = "1";
+        btn.textContent = "🔗 Connect calendar";
+      } else {
+        // Fallback: open calendar URL if configured — only advance stage if something actually opened
+        if (calendarUrl) {
+          window.open(calendarUrl, "_blank");
+          await chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "Call Offered" } }).catch(() => null);
+          await loadData();
+        } else {
+          btn.textContent = "⚠ No calendar connected";
+          setTimeout(() => { btn.textContent = label; }, 2000);
+        }
+      }
+    });
+  };
+  wireCalBtn("availCalBtn", "🕐 Times", "avail");
+  wireCalBtn("bookCalBtn", "📅 Book", "book");
 
   // Prev / Next — also drive the IG tab so the auto-sync re-affirms instead of snapping back
   document.getElementById("prevBtn")?.addEventListener("click", () => {

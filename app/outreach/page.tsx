@@ -56,7 +56,7 @@ export default function OutreachPage() {
   const [pendingUndo, setPendingUndo] = useState<{
     lead: Lead; opener: string; note: string; timer: ReturnType<typeof setTimeout>;
   } | null>(null);
-  const [showBookCall, setShowBookCall] = useState(false);
+  const [bookMode, setBookMode] = useState<"book" | "availability" | null>(null);
   const [recentMsgs, setRecentMsgs] = useState<
     { id: string; channel: string; direction: string; body: string | null; created_at: string }[]
   >([]);
@@ -530,7 +530,13 @@ export default function OutreachPage() {
               )}
             </span>
             <button
-              onClick={() => setShowBookCall(true)}
+              onClick={() => setBookMode("availability")}
+              className="rounded-lg border border-gray-700 px-3 py-1 text-xs font-semibold text-gray-400 transition-colors hover:border-gray-500 hover:text-gray-200"
+            >
+              🕐 Availability
+            </button>
+            <button
+              onClick={() => setBookMode("book")}
               className="rounded-lg px-3 py-1 text-xs font-semibold text-white transition-all"
               style={{ background: "linear-gradient(135deg, #FF3A69, #c0294d)" }}
             >
@@ -567,10 +573,11 @@ export default function OutreachPage() {
             </a>
           </div>
 
-          {showBookCall && (
+          {bookMode && (
             <BookCallModal
               lead={lead}
-              onClose={() => setShowBookCall(false)}
+              mode={bookMode}
+              onClose={() => setBookMode(null)}
               onBooked={() => { refresh(); }}
             />
           )}

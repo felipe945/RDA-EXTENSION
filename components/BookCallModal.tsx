@@ -38,9 +38,13 @@ interface Props {
   lead: Lead;
   onClose: () => void;
   onBooked?: () => void;
+  // "book" creates the event; "availability" is look-don't-book — pick up to
+  // 3 open times and copy them (or a ready DM) to offer in a conversation.
+  mode?: "book" | "availability";
 }
 
-export default function BookCallModal({ lead, onClose, onBooked }: Props) {
+export default function BookCallModal({ lead, onClose, onBooked, mode = "book" }: Props) {
+  const offering = mode === "availability";
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -59,6 +63,9 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
   const [bookError, setBookError] = useState<string | null>(null);
   const [done, setDone] = useState<{ htmlLink?: string; leadError?: string } | null>(null);
   const [dmCopied, setDmCopied] = useState(false);
+  // Availability mode: times picked to offer (max 3, can span days)
+  const [offerPicks, setOfferPicks] = useState<Slot[]>([]);
+  const [offerCopied, setOfferCopied] = useState<"" | "times" | "dm">("");
 
   // Who the call is with — availability comes from the chosen AE's calendar.
   useEffect(() => {
@@ -112,6 +119,7 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
     setStep("date");
     setSelectedKey(null);
     setSelectedSlot(null);
+    setOfferPicks([]); // picked times belong to the previous AE's calendar
     void loadSlots(aeId);
   }, [aes, aeId, loadSlots]);
 
@@ -216,6 +224,79 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
     ? `Hey! Just sent a calendar invite for ${DAYS_LONG[selectedDate.getDay()]} ${MONTHS_SHORT[selectedDate.getMonth()]} ${selectedDate.getDate()} at ${fmtTime(selectedSlot.start)} — ${SLOT_MINS} min, no pressure. Let me know if that time works!`
     : "";
 
+  // ── Availability mode: offer-times text + copy ────────────────────────────
+  function shortSlot(s: Slot) {
+    const d = new Date(s.start);
+    return `${DAYS_LONG[d.getDay()].slice(0, 3)} ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()} at ${fmtTime(s.start)}`;
+  }
+  const offerTimesText = (() => {
+    const texts = [...offerPicks]
+      .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
+      .map(shortSlot);
+    if (texts.length <= 1) return texts[0] ?? "";
+    if (texts.length === 2) return `${texts[0]} or ${texts[1]}`;
+    return `${texts.slice(0, -1).join(", ")}, or ${texts[texts.length - 1]}`;
+  })();
+  const firstName = lead.name?.trim().split(/\s+/)[0];
+  const offerDmText = `Hey${firstName ? ` ${firstName}` : ""} — happy to walk through the dashboard, no pitch, just ${SLOT_MINS} min to show you what it looks like with your numbers.\n\n${currentAe ? "We're" : "I'm"} open ${offerTimesText} — any of those work?`;
+
+  function copyOffer(kind: "times" | "dm") {
+    navigator.clipboard.writeText(kind === "dm" ? offerDmText : offerTimesText).then(() => {
+      setOfferCopied(kind);
+      setTimeout(() => setOfferCopied(""), 2000);
+    });
+  }
+
+  function togglePick(slot: Slot) {
+    setOfferPicks((prev) =>
+      prev.some((p) => p.start === slot.start)
+        ? prev.filter((p) => p.start !== slot.start)
+        : prev.length >= 3 ? prev : [...prev, slot]
+    );
+  }
+
+  const offerFooter = offering && loadState === "ready" && (
+    <div className="mt-4 pt-3" style={{ borderTop: "1px solid #1A2235" }}>
+      {offerPicks.length === 0 ? (
+        <p className="text-xs text-center" style={{ color: "#475569" }}>
+          Pick up to 3 times to offer — across any days.
+        </p>
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {offerPicks.map((p) => (
+              <button
+                key={p.start}
+                onClick={() => togglePick(p)}
+                title="Remove"
+                className="px-2 py-1 rounded-lg text-[11px] font-semibold transition-colors"
+                style={{ background: "rgba(255,58,105,0.1)", border: "1px solid rgba(255,58,105,0.35)", color: "#FF7A9C" }}
+              >
+                {shortSlot(p)} ✕
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => copyOffer("times")}
+              className="flex-1 py-2.5 rounded-xl text-xs font-bold transition-all"
+              style={{ background: "#151B2E", border: "1px solid #2A3554", color: offerCopied === "times" ? "#4ade80" : "#94A3B8" }}
+            >
+              {offerCopied === "times" ? "✓ Copied!" : "Copy times"}
+            </button>
+            <button
+              onClick={() => copyOffer("dm")}
+              className="flex-1 py-2.5 rounded-xl text-xs font-bold transition-all"
+              style={{ background: "#FF3A69", color: "white" }}
+            >
+              {offerCopied === "dm" ? "✓ Copied!" : "Copy DM"}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -229,8 +310,12 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: "1px solid #1A2235" }}>
           <div>
-            <div className="text-sm font-semibold" style={{ color: "#E2E8F0" }}>Book a Call</div>
-            <div className="text-xs mt-0.5" style={{ color: "#475569" }}>{SLOT_MINS} min · {name}</div>
+            <div className="text-sm font-semibold" style={{ color: "#E2E8F0" }}>
+              {offering ? "See Availability" : "Book a Call"}
+            </div>
+            <div className="text-xs mt-0.5" style={{ color: "#475569" }}>
+              {offering ? `offer times · ${name}` : `${SLOT_MINS} min · ${name}`}
+            </div>
           </div>
           <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
             style={{ background: "#1A2235", color: "#475569" }}
@@ -243,7 +328,7 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
         {/* Step indicator */}
         {loadState === "ready" && !done && (
           <div className="flex px-5 pt-4 gap-1.5">
-            {(["date", "time", "confirm"] as Step[]).map((s) => (
+            {((offering ? ["date", "time"] : ["date", "time", "confirm"]) as Step[]).map((s) => (
               <div key={s} className="h-0.5 flex-1 rounded-full transition-all duration-300"
                 style={{ background: step === s || (s === "date" && step !== "date") || (s === "time" && step === "confirm")
                   ? "#FF3A69" : "#1A2235" }} />
@@ -370,6 +455,7 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
                   );
                 })}
               </div>
+              {offerFooter}
             </div>
           )}
 
@@ -393,23 +479,32 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
               )}
 
               <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-1">
-                {(slotsByDate[selectedKey] ?? []).map(slot => (
-                  <button
-                    key={slot.start}
-                    onClick={() => { setSelectedSlot(slot); setStep("confirm"); }}
-                    className="py-2.5 rounded-xl text-xs font-semibold transition-all"
-                    style={
-                      selectedSlot?.start === slot.start
-                        ? { background: "#FF3A69", color: "white", border: "1px solid #FF3A69" }
-                        : { background: "#151B2E", color: "#94A3B8", border: "1px solid #1A2235" }
-                    }
-                    onMouseEnter={e => { if (selectedSlot?.start !== slot.start) { (e.currentTarget).style.borderColor = "#2A3554"; (e.currentTarget).style.color = "#E2E8F0"; } }}
-                    onMouseLeave={e => { if (selectedSlot?.start !== slot.start) { (e.currentTarget).style.borderColor = "#1A2235"; (e.currentTarget).style.color = "#94A3B8"; } }}
-                  >
-                    {fmtTime(slot.start)}
-                  </button>
-                ))}
+                {(slotsByDate[selectedKey] ?? []).map(slot => {
+                  const active = offering
+                    ? offerPicks.some((p) => p.start === slot.start)
+                    : selectedSlot?.start === slot.start;
+                  return (
+                    <button
+                      key={slot.start}
+                      onClick={() => {
+                        if (offering) togglePick(slot);
+                        else { setSelectedSlot(slot); setStep("confirm"); }
+                      }}
+                      className="py-2.5 rounded-xl text-xs font-semibold transition-all"
+                      style={
+                        active
+                          ? { background: "#FF3A69", color: "white", border: "1px solid #FF3A69" }
+                          : { background: "#151B2E", color: "#94A3B8", border: "1px solid #1A2235" }
+                      }
+                      onMouseEnter={e => { if (!active) { (e.currentTarget).style.borderColor = "#2A3554"; (e.currentTarget).style.color = "#E2E8F0"; } }}
+                      onMouseLeave={e => { if (!active) { (e.currentTarget).style.borderColor = "#1A2235"; (e.currentTarget).style.color = "#94A3B8"; } }}
+                    >
+                      {fmtTime(slot.start)}
+                    </button>
+                  );
+                })}
               </div>
+              {offerFooter}
             </div>
           )}
 
