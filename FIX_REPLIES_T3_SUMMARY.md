@@ -1,7 +1,7 @@
 # FIX-REPLIES · T3 Summary — MATCH + SURFACE + SERVER IDEMPOTENCY
 
-**Status: ✅ DONE** (2026-07-02) · Files owned: `background.js`, `app/api/messages/route.ts` (+ new migration `013`)
-**Not yet run: integration** (waiting on T2 to commit) · **One manual step: migration 013 in Supabase SQL editor**
+**Status: ✅ DONE + SHIPPED** (2026-07-02) · Files owned: `background.js`, `app/api/messages/route.ts` (+ migration `013`)
+**Integration run:** T2 committed (`073a184`), manifest bumped `2.0.0→2.1.0`, pushed to `origin/main` (`690ee05`). **Migration `013` applied via Supabase SQL editor + verified live** (PostgREST returns `item_id`/`thread_id`, HTTP 200, no `42703` — schema cache fresh, server dedup active, no fallback).
 
 ---
 
@@ -66,12 +66,16 @@ Design reality confirmed: `Replied` is in `DONE_STAGES` (`outreach-queue.js:5`) 
 
 ---
 
-## Remaining work (in order)
+## Done during integration (2026-07-02)
 
-1. **Felipe — run migration 013** in the Supabase SQL editor (`supabase/migrations/013_messages_item_id_idempotency.sql`). No CLI/psql on this machine. Until applied, dedup silently falls back to plain insert (cross-rep dupes possible, nothing breaks).
-2. **Wait for T2 to commit** — its `instagram.js` relay is in the working tree but uncommitted (T1 landed as `cc7dac1` mid-session).
-3. **Integration (T3 drives):**
-   - Bump `manifest.json` version `2.0.0 → 2.1.0` (without this, Chrome Web Store Unlisted installs won't auto-update — silently ships nothing to reps)
-   - Load unpacked, real IG, full end-to-end checklist (bottom of `FIX_REPLIES_T3_MATCH.md`)
-   - Fold T1's verification-step-0 findings (passive-vs-on-view detection) into the promise wording — **step 0 still needs a rep in devtools**
-   - Commit + push
+- ✅ T2 committed (`073a184`), wave docs committed (`690ee05`), pushed to `origin/main`.
+- ✅ Manifest bumped `2.0.0 → 2.1.0`.
+- ✅ Migration `013` applied (SQL editor — CLI blocked: not logged in + no DB password on this machine) and verified: PostgREST sees `item_id`/`thread_id` (HTTP 200, no `42703`), so cross-rep dedup is enforced at the DB, not falling back.
+
+## Remaining — all human-only, no code left
+
+1. **Verification step 0** (gates the rollout promise; ~2 min, needs a logged-in IG session). Devtools → Network on a live IG tab:
+   - Confirm T1's field paths still hold: `viewer.pk`/`thread.viewer_id`, `thread.users[].username`, `items[].user_id/.item_id/.item_type/.text`. Report back → confirm map or patch.
+   - Sit on the **feed** (not `/direct/`), have someone reply: does a background request return `items[]`, or only a badge count? If badge-only, correct the promise to "detects when a rep opens the inbox/a thread," not "from any open tab."
+2. **Web Store upload of the 2.1.0 build** — the git push does NOT ship to reps; the Unlisted-store upload does. Do this *after* step 1 so field paths aren't stale on ship.
+3. **Two-browser live test** (now unblocked — migration is live): two profiles on the shared account, one lead replies → exactly **one** inbound row + DM Sent→Replied flip + 📸 notify. Plus the rest of the end-to-end checklist at the bottom of `FIX_REPLIES_T3_MATCH.md`.
