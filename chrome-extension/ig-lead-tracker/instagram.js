@@ -1888,8 +1888,9 @@
         sb.textContent = `+${label}`;
         sb.style.cssText = "background:#111;border:1px solid #252525;border-radius:4px;color:#444;font-size:10px;font-weight:600;padding:2px 6px;cursor:pointer";
         sb.addEventListener("click", async () => {
-          const updated = { ...fb_snoozed, [currentLeadId]: Date.now() + days * 24 * 3600000 };
-          await chrome.storage.local.set({ fb_snoozed: updated }).catch(() => {});
+          // C4: server-side snooze (background does the authed POST)
+          const until = new Date(Date.now() + days * 24 * 3600000).toISOString();
+          await chrome.runtime.sendMessage({ type: "SNOOZE_LEAD", id: currentLeadId, until }).catch(() => {});
           window.location.href = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
         });
         controlRow.appendChild(sb);

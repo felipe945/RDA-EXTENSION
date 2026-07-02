@@ -15,6 +15,22 @@ function repAuthHeader() {
   return repToken ? { Authorization: `Bearer ${repToken}` } : {};
 }
 
+// C5: PATCH /api/leads/:id — direct field updates (stage, notes, due_at)
+async function apiPatchLead(leadId, updates) {
+  try {
+    const res = await fetch(`${dashboardUrl}/api/leads/${leadId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...repAuthHeader() },
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) throw new Error(String(res.status));
+    chrome.runtime.sendMessage({ type: "REFRESH_CACHE" }).catch(() => {});
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function relTime(ts) {
@@ -62,6 +78,8 @@ function scoreColor(s) {
   return "#ef4444";
 }
 
+const ALL_STAGES = ["New", "Warming", "DM Sent", "Replied", "Qualifying", "Call Offered", "Booked", "Closed", "DQ"];
+
 function stageColor(stage) {
   const c = {
     "New": "#64748b", "Warming": "#f59e0b", "DM Sent": "#3b82f6",
@@ -77,8 +95,13 @@ function channelIcon(ch) {
   return m[(ch || "").toLowerCase()] || "💬";
 }
 
+// C7: canonical IG profile URL from a handle
+function igProfileUrl(handle) {
+  return handle ? `https://www.instagram.com/${String(handle).replace(/^@/, "")}/` : null;
+}
+
 function igUrl(lead) {
-  return lead.ig_profile_url || (lead.ig_username ? `https://www.instagram.com/${lead.ig_username}/` : null);
+  return lead.ig_profile_url || igProfileUrl(lead.ig_username);
 }
 
 function displayName(lead) {
@@ -241,12 +264,14 @@ function renderLeads() {
     const url = igUrl(lead);
     const u = urgency(lead);
     const isUrgent = u === "overdue" || u === "today";
+    const handle = lead.ig_username || "";
 
     return `
       <div class="lead-item ${isUrgent ? "lead-urgent" : ""}">
         <div class="lead-header">
           <div class="lead-name">
-            ${esc(displayName(lead))}
+            ${handle ? `<a class="handle-link" href="${esc(igProfileUrl(handle))}" target="_blank" rel="noreferrer">${esc(displayName(lead))}</a>` : esc(displayName(lead))}
+            ${handle ? `<button class="copy-handle-btn" data-handle="${esc(handle)}" title="Copy @${esc(handle)}">⧉</button>` : ""}
             ${score !== null ? `<span class="score-badge" style="color:${scoreColor(score)}">${score}</span>` : ""}
             ${lead.research_status === "pending" ? '<span class="pulse-dot"></span>' : ""}
           </div>
@@ -268,9 +293,9 @@ function renderLeads() {
           ${url ? `<button class="btn-sm btn-pink open-ig-btn" data-url="${esc(url)}" data-opener="${encodeURIComponent(opener || "")}">📸 Open${opener ? " + Copy" : ""}</button>` : ""}
           <button class="btn-sm view-profile-btn" style="background:none;border:1px solid #1e1e2a;color:#475569;font-size:10px" data-lead-id="${esc(lead.id)}">View →</button>
           <div class="quick-stages">
-            ${["DM Sent", "Replied", "Qualifying", "Call Offered", "Booked"].map((s) => `
-              <button class="qs-btn ${lead.stage === s ? "qs-active" : ""}" data-id="${esc(lead.id)}" data-stage="${s}" style="${lead.stage === s ? `color:${stageColor(s)};border-color:${stageColor(s)}` : ""}">${s}</button>
-            `).join("")}
+            <select class="stage-select" data-id="${esc(lead.id)}" style="color:${stageColor(lead.stage)};border-color:${stageColor(lead.stage)}44">
+              ${ALL_STAGES.map((s) => `<option value="${s}" ${lead.stage === s ? "selected" : ""}>${s}</option>`).join("")}
+            </select>
           </div>
         </div>
       </div>
@@ -293,20 +318,30 @@ function renderLeads() {
     });
   });
 
-  list.querySelectorAll(".qs-btn").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
+  list.querySelectorAll(".stage-select").forEach((sel) => {
+    sel.addEventListener("click", (e) => e.stopPropagation());
+    sel.addEventListener("change", async (e) => {
       e.stopPropagation();
-      btn.disabled = true;
-      await chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: btn.dataset.id, updates: { stage: btn.dataset.stage } });
+      sel.disabled = true;
+      await apiPatchLead(sel.dataset.id, { stage: sel.value });
       await loadData();
+    });
+  });
+
+  list.querySelectorAll(".copy-handle-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(`@${btn.dataset.handle}`).catch(() => {});
+      btn.textContent = "✓";
+      setTimeout(() => (btn.textContent = "⧉"), 1200);
     });
   });
 
   // Clicking a lead row opens that profile in the active IG tab and switches to Outreach
   list.querySelectorAll(".lead-item").forEach((item) => {
     item.addEventListener("click", (e) => {
-      // Don't fire if user clicked a button inside the row
-      if (e.target.closest("button, a")) return;
+      // Don't fire if user clicked a button/link/control inside the row
+      if (e.target.closest("button, a, select, textarea, input")) return;
       const leadId = item.querySelector(".view-profile-btn")?.dataset.leadId;
       if (!leadId) return;
       const target = allLeads.find(l => l.id === leadId);
@@ -333,15 +368,22 @@ let calendarUrl = "";
 let quickSaveTabId = null;
 
 async function loadSnoozedLeads() {
+  // Legacy local snoozes (pre-2.3.0) — still honored until they expire, but no new
+  // writes: snooze is server-side now (C4) and reads from the lead's `snoozed_until`.
   const { fb_snoozed = {} } = await chrome.storage.local.get({ fb_snoozed: {} });
   const now = Date.now();
   snoozedLeads = Object.fromEntries(Object.entries(fb_snoozed).filter(([, ts]) => ts > now));
-  await chrome.storage.local.set({ fb_snoozed: snoozedLeads });
 }
 
-async function snoozeLeadLocal(leadId, days) {
-  snoozedLeads[leadId] = Date.now() + days * 24 * 3600 * 1000;
-  await chrome.storage.local.set({ fb_snoozed: snoozedLeads });
+// C4: POST /api/leads/:id/snooze — persists across devices and shows on the dashboard
+async function snoozeLeadServer(leadId, days) {
+  const until = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
+  const res = await chrome.runtime.sendMessage({ type: "SNOOZE_LEAD", id: leadId, until }).catch(() => null);
+  if (res?.ok) {
+    const target = allLeads.find((l) => l.id === leadId);
+    if (target) target.snoozed_until = until;
+  }
+  return !!res?.ok;
 }
 
 function getChannelDone(leadId) {
@@ -658,6 +700,8 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins) {
 }
 
 function renderOutreach() {
+  // Don't clobber the notes textarea mid-typing — blur triggers a save + re-render
+  if (document.activeElement && document.activeElement.id === "leadNotes") return;
   stopResearchPoll();
   const queue = buildOutreachQueue(outreachChannel);
   outreachIdx = Math.min(outreachIdx, Math.max(0, queue.length - 1));
@@ -787,7 +831,8 @@ function renderOutreach() {
       ${alreadyUsesBanner}
       <div class="outreach-top">
         <div class="outreach-name-row">
-          <span class="outreach-name">${esc(displayName(lead))}</span>
+          <span class="outreach-name">${lead.ig_username ? `<a class="handle-link" href="${esc(igProfileUrl(lead.ig_username))}" target="_blank" rel="noreferrer">${esc(displayName(lead))}</a>` : esc(displayName(lead))}</span>
+          ${lead.ig_username ? `<button class="copy-handle-btn" id="copyHandleBtn" data-handle="${esc(lead.ig_username)}" title="Copy @${esc(lead.ig_username)}">⧉</button>` : ""}
           ${followers ? `<span class="followers-badge">${esc(followers)}</span>` : ""}
         </div>
         <div class="outreach-badges">
@@ -817,6 +862,23 @@ function renderOutreach() {
         <button style="flex:1;background:#0f2540;border:1px solid #1d4ed8;border-radius:6px;color:#93c5fd;font-size:11px;font-weight:600;padding:6px;cursor:pointer" id="bookCalBtn" data-id="${esc(lead.id)}">📅 Book a Call</button>
       </div>
 
+      <div style="display:flex;align-items:center;gap:6px;margin-top:5px">
+        <span style="font-size:10px;color:#475569;flex-shrink:0">Stage:</span>
+        <select class="stage-select" id="outreachStageSelect" style="flex:1;color:${stageColor(lead.stage)};border-color:${stageColor(lead.stage)}44">
+          ${ALL_STAGES.map((s) => `<option value="${s}" ${lead.stage === s ? "selected" : ""}>${s}</option>`).join("")}
+        </select>
+      </div>
+
+      <div class="card-notes" style="margin-top:8px">
+        <textarea id="leadNotes" rows="2" placeholder="Notes… (auto-saves)">${esc(lead.notes || "")}</textarea>
+      </div>
+      <div style="display:flex;align-items:center;gap:5px;margin-top:5px;flex-wrap:wrap">
+        <span style="font-size:10px;color:#475569;flex-shrink:0">Follow up:</span>
+        ${[1, 3, 7].map((d) => `<button class="fu-btn" data-days="${d}">+${d}d</button>`).join("")}
+        ${lead.due_at ? `<button class="fu-btn" id="fuClearBtn" title="Clear due date">clear</button>` : ""}
+        ${lead.due_at ? `<span style="font-size:10px;color:#64748b;margin-left:auto">${esc(dueLabel(lead.due_at))}</span>` : ""}
+      </div>
+
       <div class="outreach-nav">
         <button class="nav-btn" id="prevBtn" ${outreachIdx === 0 ? "disabled" : ""}>← Prev</button>
         <div class="snooze-group">
@@ -829,6 +891,64 @@ function renderOutreach() {
       </div>
     </div>
   `;
+
+  // Copy @handle
+  const copyHandleBtn = document.getElementById("copyHandleBtn");
+  if (copyHandleBtn) {
+    copyHandleBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(`@${copyHandleBtn.dataset.handle}`).catch(() => {});
+      copyHandleBtn.textContent = "✓";
+      setTimeout(() => (copyHandleBtn.textContent = "⧉"), 1200);
+    });
+  }
+
+  // Full stage control (C5)
+  document.getElementById("outreachStageSelect")?.addEventListener("change", async (e) => {
+    const sel = e.currentTarget;
+    sel.disabled = true;
+    const ok = await apiPatchLead(lead.id, { stage: sel.value });
+    if (!ok) {
+      sel.disabled = false;
+      sel.value = lead.stage;
+      return;
+    }
+    delete fbChannelDone[lead.id];
+    await loadData();
+  });
+
+  // Notes — auto-save (debounced + on blur) via PATCH /api/leads/:id { notes }
+  const notesEl = document.getElementById("leadNotes");
+  if (notesEl) {
+    let notesTimer = null;
+    const saveNotes = () => {
+      const val = notesEl.value;
+      if (val === (lead.notes || "")) return;
+      lead.notes = val;
+      apiPatchLead(lead.id, { notes: val });
+    };
+    notesEl.addEventListener("input", () => {
+      clearTimeout(notesTimer);
+      notesTimer = setTimeout(saveNotes, 800);
+    });
+    notesEl.addEventListener("blur", () => {
+      clearTimeout(notesTimer);
+      saveNotes();
+    });
+  }
+
+  // Follow-up date setter — PATCH /api/leads/:id { due_at }
+  list.querySelectorAll(".fu-btn[data-days]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      const due = new Date(Date.now() + parseInt(btn.dataset.days) * 86400000).toISOString();
+      await apiPatchLead(lead.id, { due_at: due });
+      await loadData();
+    });
+  });
+  document.getElementById("fuClearBtn")?.addEventListener("click", async () => {
+    await apiPatchLead(lead.id, { due_at: null });
+    await loadData();
+  });
 
   // Copy opener
   const copyOpenerBtn = document.getElementById("copyOpenerBtn");
@@ -1002,10 +1122,11 @@ function renderOutreach() {
     renderOutreach();
   });
 
-  // Snooze buttons
+  // Snooze buttons — server-side (C4)
   list.querySelectorAll(".snooze-btn").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      await snoozeLeadLocal(lead.id, parseInt(btn.dataset.days));
+      btn.disabled = true;
+      await snoozeLeadServer(lead.id, parseInt(btn.dataset.days));
       renderOutreach();
     });
   });

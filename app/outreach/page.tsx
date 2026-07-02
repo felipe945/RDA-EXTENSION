@@ -4,6 +4,8 @@ import { useState, useCallback, useEffect } from "react";
 import { useLeads } from "@/hooks/useLeads";
 import { useMode } from "@/components/ModeProvider";
 import type { Lead } from "@/hooks/useLeads";
+import { IgHandle, igDmUrl, igProfileUrl, isSnoozed, type LeadPlus } from "@/components/ig";
+import { SnoozeControl } from "@/components/SnoozeControl";
 
 type Channel = "ig" | "email" | "linkedin";
 
@@ -50,7 +52,11 @@ export default function OutreachPage() {
     lead: Lead; opener: string; note: string; timer: ReturnType<typeof setTimeout>;
   } | null>(null);
 
-  const allLeads = allLeadsRaw.filter((l) => !SKIP_STAGES.includes(l.stage));
+  // Snoozed leads sit out of the queue until snoozed_until passes (C4 —
+  // server-persisted, shared with the extension).
+  const allLeads = (allLeadsRaw as LeadPlus[]).filter(
+    (l) => !SKIP_STAGES.includes(l.stage) && !isSnoozed(l),
+  );
 
   const queued = allLeads.filter((l) => {
     if (channel === "ig") return l.source === "IG" || !!l.ig_username;
@@ -70,13 +76,15 @@ export default function OutreachPage() {
     });
   }, [opener]);
 
+  // C7: the primary "open" is the profile page, not the DM thread — matches
+  // the extension. openDm stays as the secondary action.
   function openProfile() {
     if (!lead) return;
     if (channel === "ig") {
-      const dmUrl = lead.ig_username
-        ? `https://www.instagram.com/direct/t/${lead.ig_username}`
-        : lead.ig_profile_url ?? `https://www.instagram.com/${lead.ig_username}/`;
-      window.open(dmUrl, "_blank");
+      const url = lead.ig_username
+        ? igProfileUrl(lead.ig_username)
+        : lead.ig_profile_url;
+      if (url) window.open(url, "_blank");
     } else if (channel === "linkedin" && lead.linkedin_url) {
       window.open(lead.linkedin_url, "_blank");
     } else if (channel === "email" && lead.email) {
@@ -89,6 +97,11 @@ export default function OutreachPage() {
   function openAndCopy() {
     copyOpener();
     openProfile();
+  }
+
+  function openDm() {
+    if (!lead?.ig_username) return;
+    window.open(igDmUrl(lead.ig_username), "_blank");
   }
 
   async function markSent() {
@@ -272,7 +285,9 @@ export default function OutreachPage() {
               <div>
                 <div className="flex items-center gap-2">
                   <span className="text-xl font-bold text-white">
-                    {lead.ig_username ? `@${lead.ig_username}` : (lead.name ?? "Unnamed")}
+                    {lead.ig_username
+                      ? <IgHandle handle={lead.ig_username} className="text-white" />
+                      : (lead.name ?? "Unnamed")}
                   </span>
                   {lead.follower_count && (
                     <span className="text-sm text-gray-500">{formatFollowers(lead.follower_count)} followers</span>
@@ -379,6 +394,28 @@ export default function OutreachPage() {
             >
               {saving === "sent" ? "Saving..." : pendingUndo ? "Queued…" : "✓ DM Sent"}
             </button>
+          </div>
+
+          {/* Snooze — server-persisted, shared with the extension */}
+          <div className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-900 px-3 py-2">
+            <SnoozeControl
+              lead={lead}
+              onSnoozed={async () => {
+                setNote("");
+                setCopied(false);
+                await refresh();
+                setIdx((i) => Math.min(i, Math.max(0, queued.length - 2)));
+              }}
+            />
+            {lead.ig_username && (
+              <button
+                onClick={openDm}
+                className="rounded border border-gray-700 px-2 py-0.5 text-xs text-gray-500 transition-colors hover:border-gray-500 hover:text-gray-300"
+                title="Open the Instagram DM thread"
+              >
+                Open DM ↗
+              </button>
+            )}
           </div>
 
           {/* Secondary actions */}

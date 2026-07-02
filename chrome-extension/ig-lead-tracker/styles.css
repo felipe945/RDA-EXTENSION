@@ -157,6 +157,40 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .btn-pink { background: var(--pink); color: #fff; }
 .btn-pink:hover { opacity: .9; }
 
+/* Clickable IG handle + copy-handle */
+.handle-link { color: inherit; text-decoration: none; }
+.handle-link:hover { color: var(--pink); text-decoration: underline; }
+.copy-handle-btn {
+  font-size: 10px; padding: 1px 5px; border-radius: 4px; line-height: 1.3;
+  border: 1px solid var(--border2); background: none; color: var(--text3); cursor: pointer;
+}
+.copy-handle-btn:hover { border-color: var(--blue); color: #93c5fd; }
+
+/* Full 9-stage dropdown */
+.stage-select {
+  font-size: 10px; font-weight: 600; padding: 3px 6px; border-radius: 5px;
+  border: 1px solid var(--border2); background: var(--bg3); color: var(--text2);
+  cursor: pointer; outline: none;
+}
+.stage-select:hover { border-color: var(--text2); }
+.stage-select:disabled { opacity: .5; cursor: default; }
+.stage-select option { background: var(--bg2); color: var(--text2); }
+
+/* Outreach card notes + follow-up */
+.card-notes textarea {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 42px;
+  background: var(--bg3); border: 1px solid var(--border2); border-radius: 7px;
+  color: var(--text2); font-size: 11px; line-height: 1.4; padding: 7px 9px;
+  font-family: inherit; outline: none; transition: border-color .15s;
+}
+.card-notes textarea:focus { border-color: var(--blue); }
+.fu-btn {
+  font-size: 10px; padding: 3px 7px; border-radius: 5px;
+  border: 1px solid var(--border2); background: none; color: var(--text3); cursor: pointer;
+}
+.fu-btn:hover { border-color: var(--blue); color: #93c5fd; }
+.fu-btn:disabled { opacity: .4; cursor: default; }
+
 .quick-stages { display: flex; gap: 3px; flex-wrap: wrap; }
 .qs-btn {
   font-size: 10px; padding: 2px 7px; border-radius: 5px;

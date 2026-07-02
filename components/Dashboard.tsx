@@ -12,6 +12,9 @@ import Link from "next/link";
 import type { Lead } from "@/hooks/useLeads";
 import { LeadCardSkeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { type LeadPlus } from "@/components/ig";
+import { ownerLabel as getOwnerLabel } from "@/components/OwnerControl";
+import { RepStatsPanel } from "@/components/RepStatsPanel";
 
 type UrgencyBucket = "overdue" | "today" | "upcoming" | "booked" | "archived";
 type SourceTab = "all" | "IG" | "Email" | "LinkedIn" | "Manual";
@@ -140,20 +143,21 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
   const [search, setSearch] = useState("");
   const [scope, setScope] = useState<"mine" | "team">("mine");
 
-  // TEAM-T1's lib/auth.ts adds userId/role to the session; until it ships they read as undefined.
   const userId = session?.userId;
-  // Reps only ever see their own leads — the toggle is owner/admin only.
+  // The server already scopes what reps receive (C1: cold pool + own). The
+  // toggle is a view convenience for owner/admin only — reps never see it.
   const showTeamToggle = canSeeAllLeads(session?.role);
 
   const memberName = (id: string | null): string | undefined =>
     id ? members.find((m) => m.userId === id)?.name : undefined;
 
-  // "Mine" scopes to leads assigned to me. If userId isn't known yet (pre-T1),
-  // don't hide everything — fall back to showing all so the dashboard never goes blank.
+  // Hybrid ownership: "Mine" = leads I've claimed (owner_id — stamped by the
+  // server when I send the DM). If userId isn't known yet, don't hide
+  // everything — fall back to showing all so the dashboard never goes blank.
   const leads =
     scope === "team" || !userId
       ? allLeads
-      : allLeads.filter((l) => l.assigned_to === userId);
+      : allLeads.filter((l) => (l as LeadPlus).owner_id === userId);
 
   const pendingResearch = leads.filter(
     (l) => l.research_status === "pending" || l.research_status === "none"
@@ -302,6 +306,10 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
         </div>
       )}
 
+      {/* Per-rep attribution — admin, team view only (C6; hides itself if the
+          endpoint isn't live or returns 403) */}
+      {showTeamToggle && scope === "team" && <RepStatsPanel />}
+
       {/* Source tabs */}
       <div className="flex items-center gap-1 border-b pb-1 overflow-x-auto" style={{ borderColor: '#1A2235' }}>
         {SOURCE_TABS.map(({ key, label, icon }) => {
@@ -389,7 +397,12 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
           </h2>
           <div className="space-y-2">
             {grouped[b].map((lead) => (
-              <LeadCard key={lead.id} lead={lead} urgency={b} assigneeName={memberName(lead.assigned_to)} />
+              <LeadCard
+                key={lead.id}
+                lead={lead}
+                urgency={b}
+                ownerLabel={getOwnerLabel(lead as LeadPlus, userId, memberName)}
+              />
             ))}
           </div>
         </section>

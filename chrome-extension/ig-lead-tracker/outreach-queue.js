@@ -23,8 +23,12 @@
   }
 
   function isSnoozed(lead, snoozed, now) {
+    const t = now == null ? Date.now() : now;
+    // Server-side snooze (C1 `snoozed_until`) is the source of truth
+    if (lead.snoozed_until && new Date(lead.snoozed_until).getTime() > t) return true;
+    // Legacy local snoozes (pre-2.3.0) honored until they expire
     const until = snoozed && snoozed[lead.id];
-    return !!until && until > (now == null ? Date.now() : now);
+    return !!until && until > t;
   }
 
   // Canonical OPEN queue: not-done, not-snoozed, has the channel, sorted by displayed score desc.

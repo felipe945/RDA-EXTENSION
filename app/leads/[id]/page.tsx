@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useLead } from "@/hooks/useLeads";
 import LeadDetailPanel from "@/components/LeadDetailPanel";
+import { IgHandle } from "@/components/ig";
 
 export default function LeadPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -31,7 +32,9 @@ export default function LeadPage({ params }: { params: Promise<{ id: string }> }
     );
   }
 
-  const displayName = lead.ig_username ? `@${lead.ig_username}` : (lead.name ?? "Unknown");
+  const displayName = lead.ig_username
+    ? <IgHandle handle={lead.ig_username} className="text-inherit" />
+    : (lead.name ?? "Unknown");
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">

@@ -235,6 +235,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         break;
       }
 
+      // C4: server-side snooze — POST /api/leads/:id/snooze { until: ISO | null }
+      case "SNOOZE_LEAD": {
+        try {
+          const res = await fetch(`${dashboardUrl}/api/leads/${msg.id}/snooze`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...bearer },
+            body: JSON.stringify({ until: msg.until ?? null }),
+          });
+          if (!res.ok) throw new Error(String(res.status));
+          // Optimistic cache update so queues drop the lead before the next refresh
+          const target = cache.leads.find((l) => l.id === msg.id);
+          if (target) target.snoozed_until = msg.until ?? null;
+          await chrome.storage.local.set({ fb_cache: cache });
+          setTimeout(refreshCache, 1500);
+          sendResponse({ ok: true });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+        break;
+      }
+
       // Saves which IG account is currently logged in (detected by page-interceptor)
       case "IG_VIEWER": {
         const { handle } = msg;

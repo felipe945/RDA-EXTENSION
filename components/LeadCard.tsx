@@ -4,6 +4,8 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import type { Lead } from "@/hooks/useLeads";
 import { stageColor } from "@/lib/stage-colors";
+import { IgHandle, isSnoozed, type LeadPlus } from "@/components/ig";
+import { OwnerChip, OwnerControl } from "@/components/OwnerControl";
 
 type UrgencyBucket = "overdue" | "today" | "upcoming" | "booked" | "archived";
 
@@ -57,7 +59,8 @@ function SfBadge({ status, score }: { status: string; score: number }) {
   );
 }
 
-export default function LeadCard({ lead, urgency, assigneeName }: { lead: Lead; urgency: UrgencyBucket; assigneeName?: string }) {
+export default function LeadCard({ lead: leadProp, urgency, ownerLabel }: { lead: Lead; urgency: UrgencyBucket; ownerLabel?: string }) {
+  const lead = leadProp as LeadPlus;
   const [expanded, setExpanded] = useState(false);
   const [note, setNote] = useState("");
   const [undoStage, setUndoStage] = useState<{ prev: string; timer: ReturnType<typeof setTimeout> } | null>(null);
@@ -111,7 +114,9 @@ export default function LeadCard({ lead, urgency, assigneeName }: { lead: Lead; 
         <div className="flex items-center gap-2 min-w-0">
           <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#FF3A69] to-[#3B82F6] flex-shrink-0 flex items-center justify-center text-white text-[10px] font-bold">{(lead.ig_username ?? lead.name ?? '?')[0].toUpperCase()}</div>
           <span className="font-medium text-sm truncate">
-            {lead.ig_username ? `@${lead.ig_username}` : (lead.name ?? "Unnamed")}
+            {lead.ig_username
+              ? <IgHandle handle={lead.ig_username} className="text-inherit" />
+              : (lead.name ?? "Unnamed")}
           </span>
           {lead.follower_count != null && (
             <span className="text-xs text-gray-500 shrink-0">
@@ -167,14 +172,15 @@ export default function LeadCard({ lead, urgency, assigneeName }: { lead: Lead; 
           )}
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          {assigneeName && (
+          {isSnoozed(lead) && (
             <span
-              title={`Assigned to ${assigneeName}`}
-              className="flex h-5 w-5 items-center justify-center rounded-full bg-[#1E2640] text-[10px] font-medium text-[#94A3B8]"
+              className="text-[11px] text-[#d4892a]"
+              title={`Snoozed until ${new Date(lead.snoozed_until!).toLocaleDateString()}`}
             >
-              {assigneeName.charAt(0).toUpperCase()}
+              zzz
             </span>
           )}
+          {ownerLabel && <OwnerChip label={ownerLabel} />}
           <span className="text-xs text-gray-400">{lead.stage}</span>
           {lead.due_at && (
             <span className={`text-xs ${urgency === "overdue" ? "text-[#d4892a]" : "text-gray-500"}`}>
@@ -215,6 +221,12 @@ export default function LeadCard({ lead, urgency, assigneeName }: { lead: Lead; 
                 </button>
               );
             })}
+          </div>
+
+          {/* Owner — admins get the reassign/release control, reps see the chip */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-gray-500">Owner:</span>
+            <OwnerControl lead={lead} />
           </div>
 
           {/* Follow-up date setter */}
