@@ -43,6 +43,16 @@ export async function POST(req: NextRequest) {
 
   const db = supabaseServer();
 
+  // Under C1 scoping a lead without org_id is invisible to everyone, so every
+  // insert must carry one. repToken carries the rep's org; the legacy
+  // x-ig-secret path has no identity, so fall back to the sole org
+  // (single-tenant today — revisit if a second org ever exists).
+  let orgId = rep?.team_id ?? null;
+  if (!orgId) {
+    const { data: org } = await db.from("orgs").select("id").limit(1).maybeSingle();
+    orgId = (org?.id as string) ?? null;
+  }
+
   if (type === "IG_PROFILE_SAVE") {
     const now = new Date().toISOString();
     const saveEvent = { type, postUrl: profileUrl ?? pageUrl ?? null, ts: now, rep_id: repId };
@@ -101,6 +111,7 @@ export async function POST(req: NextRequest) {
           ig_events: [saveEvent],
           due_at: dueAt,
           updated_at: now,
+          org_id: orgId,
           // key omitted when unauthenticated-by-token so the legacy x-ig-secret
           // path keeps inserting during the deploy→migration-014 window
           ...(repId ? { rep_id: repId } : {}),
@@ -169,6 +180,7 @@ export async function POST(req: NextRequest) {
       stage: type === "follow" ? "Warming" : "New",
       ig_events: [event],
       due_at: dueAt,
+      org_id: orgId,
       ...(repId ? { rep_id: repId } : {}),
     });
   }

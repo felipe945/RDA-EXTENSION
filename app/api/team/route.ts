@@ -1,11 +1,15 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { supabaseServer } from "@/lib/supabase";
+import { canManageTeam } from "@/lib/permissions";
 
 // GET /api/team → { members: [{ userId, name, email, role, capacity, openLeads }] }
+// Admin-only (fail-closed): the member list with workloads is management data.
 export async function GET() {
   const session = await getServerSession(authOptions);
-  if (!session?.orgId) return Response.json({ error: "unauthorized" }, { status: 401 });
+  if (!session?.orgId || !canManageTeam(session.role)) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
 
   const db = supabaseServer();
   const { data: memberships } = await db

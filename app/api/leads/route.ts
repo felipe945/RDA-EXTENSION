@@ -3,9 +3,16 @@ import { supabaseServer } from "@/lib/supabase";
 import { scoreLead } from "@/lib/scoring";
 import { applyLeadPatch } from "@/lib/leads-update";
 import { getSupabaseErrorMessage } from "@/lib/supabaseError";
+import { getActor, scopeLeadsQuery, canAccessLead } from "@/lib/scope";
+import { canSeeAllLeads } from "@/lib/permissions";
 
 // GET /api/leads?mode=sales|csm&stage=X&bucket=overdue|today|upcoming|booked|archived
+// C1 — org + role/owner scoped: admin sees all org leads, reps see the shared
+// cold pool (owner_id null) + their own. Admin rows carry owner_name.
 export async function GET(request: NextRequest) {
+  const actor = await getActor(request);
+  if (!actor) return Response.json({ error: "unauthorized" }, { status: 401 });
+
   const db = supabaseServer();
   const { searchParams } = request.nextUrl;
 
@@ -16,7 +23,12 @@ export async function GET(request: NextRequest) {
   const igUsername = searchParams.get("ig_username");
   const id = searchParams.get("id");
 
-  let query = db.from("leads").select("*").order("due_at", { ascending: true });
+  const isAdmin = canSeeAllLeads(actor.role);
+  let query = db
+    .from("leads")
+    .select((isAdmin ? "*, owner:users!leads_owner_id_fkey(name)" : "*") as string)
+    .order("due_at", { ascending: true });
+  query = scopeLeadsQuery(query, actor);
 
   const searchQuery = searchParams.get("search");
 
@@ -63,11 +75,22 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: getSupabaseErrorMessage(error) }, { status: 500 });
   }
 
-  return Response.json({ leads: data });
+  // Flatten the admin-only owner embed into owner_name (C1).
+  const leads = ((data ?? []) as unknown as Record<string, unknown>[]).map((row) => {
+    const { owner, ...rest } = row;
+    return isAdmin
+      ? { ...rest, owner_name: (owner as { name?: string } | null)?.name ?? null }
+      : rest;
+  });
+
+  return Response.json({ leads });
 }
 
 // POST /api/leads  — create a new lead
 export async function POST(request: NextRequest) {
+  const actor = await getActor(request);
+  if (!actor) return Response.json({ error: "unauthorized" }, { status: 401 });
+
   const db = supabaseServer();
 
   let body: Record<string, unknown>;
@@ -85,9 +108,11 @@ export async function POST(request: NextRequest) {
     researchCache: body.research_cache as Record<string, unknown> | undefined,
   });
 
+  // org_id comes from the actor, never the body — a lead created outside the
+  // actor's org would be invisible to everyone under C1 scoping.
   const { data, error } = await db
     .from("leads")
-    .insert({ ...body, score, updated_at: new Date().toISOString() })
+    .insert({ ...body, org_id: actor.orgId, score, updated_at: new Date().toISOString() })
     .select()
     .maybeSingle();
 
@@ -100,6 +125,9 @@ export async function POST(request: NextRequest) {
 
 // PATCH /api/leads  — update a lead by id (body must include id)
 export async function PATCH(request: NextRequest) {
+  const actor = await getActor(request);
+  if (!actor) return Response.json({ error: "unauthorized" }, { status: 401 });
+
   const db = supabaseServer();
 
   let body: Record<string, unknown>;
@@ -115,22 +143,32 @@ export async function PATCH(request: NextRequest) {
     return Response.json({ error: "Missing id" }, { status: 400 });
   }
 
-  const { data, error } = await applyLeadPatch(db, id, fields);
+  const { data, error, status } = await applyLeadPatch(db, id, fields, actor);
 
   if (error) {
-    return Response.json({ error: getSupabaseErrorMessage(error) }, { status: 500 });
+    return Response.json({ error: getSupabaseErrorMessage(error) }, { status: status ?? 500 });
   }
 
   return Response.json({ lead: data });
 }
 
-// DELETE /api/leads?id=uuid
+// DELETE /api/leads?id=uuid — scoped like a patch: reps may delete only cold
+// or own leads, admin any org lead.
 export async function DELETE(request: NextRequest) {
+  const actor = await getActor(request);
+  if (!actor) return Response.json({ error: "unauthorized" }, { status: 401 });
+
   const db = supabaseServer();
   const id = request.nextUrl.searchParams.get("id");
 
   if (!id) {
     return Response.json({ error: "Missing id" }, { status: 400 });
+  }
+
+  const { data: lead } = await db.from("leads").select("org_id, owner_id").eq("id", id).maybeSingle();
+  if (!lead) return Response.json({ error: "not found" }, { status: 404 });
+  if (!canAccessLead(actor, lead)) {
+    return Response.json({ error: "forbidden" }, { status: 403 });
   }
 
   const { error } = await db.from("leads").delete().eq("id", id);

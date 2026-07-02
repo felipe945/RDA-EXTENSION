@@ -21,6 +21,12 @@
 //                            check (and must redirect a fresh browser tab to
 //                            /login, not 401); bootstrap verifies the repToken
 //   - /api/calendar/*        Chrome extension, authenticates via repToken
+//   - /api/leads/*, /api/messages, /api/notifications, /api/stats/*
+//                            SPLIT wave: authenticated by getActor() in every
+//                            handler — NextAuth session OR Bearer repToken
+//                            (the extension has no cookie). The session-only
+//                            routes under these prefixes (assign-next,
+//                            bulk-import) do their own getServerSession check.
 // These each authenticate themselves internally, so bypassing the session check
 // here does not expose data.
 import { getToken } from "next-auth/jwt";
@@ -31,7 +37,10 @@ const OPEN_API_PREFIXES = [
   "/api/ig-events",
   "/api/sendblue",
   "/api/inngest",
-  "/api/leads/batch-enrich",
+  "/api/leads",
+  "/api/messages",
+  "/api/notifications",
+  "/api/stats",
   "/api/salesforce/batch",
   "/api/ai/research-lead",
   "/api/log",

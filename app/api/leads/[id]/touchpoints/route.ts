@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase";
+import { getActor, canAccessLead } from "@/lib/scope";
 
 type Ctx = { params: Promise<{ id: string }> };
 
 // POST — log a new touchpoint
 export async function POST(req: NextRequest, { params }: Ctx) {
   const { id } = await params;
+  const actor = await getActor(req);
+  if (!actor) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   const body = await req.json() as { channel?: string; result?: string; note?: string };
   const { channel, result = "sent", note } = body;
 
@@ -15,11 +19,12 @@ export async function POST(req: NextRequest, { params }: Ctx) {
 
   const { data: lead, error: fetchErr } = await db
     .from("leads")
-    .select("outreach_log")
+    .select("outreach_log, org_id, owner_id")
     .eq("id", id)
     .single();
 
   if (fetchErr || !lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+  if (!canAccessLead(actor, lead)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const existing = (lead.outreach_log as unknown[]) ?? [];
   const entry = {
@@ -47,6 +52,9 @@ export async function POST(req: NextRequest, { params }: Ctx) {
 // PATCH — update result or note on an existing touchpoint
 export async function PATCH(req: NextRequest, { params }: Ctx) {
   const { id } = await params;
+  const actor = await getActor(req);
+  if (!actor) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   const body = await req.json() as { touchpointId?: string; result?: string; note?: string };
   const { touchpointId, result, note } = body;
 
@@ -54,8 +62,9 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
   const db = supabaseServer();
 
-  const { data: lead } = await db.from("leads").select("outreach_log").eq("id", id).single();
+  const { data: lead } = await db.from("leads").select("outreach_log, org_id, owner_id").eq("id", id).single();
   if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+  if (!canAccessLead(actor, lead)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const log = (lead.outreach_log as Record<string, unknown>[]) ?? [];
   const updated = log.map((e) =>

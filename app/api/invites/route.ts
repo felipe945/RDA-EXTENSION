@@ -8,7 +8,10 @@ import { buildInviteEmail } from "@/lib/invite-email";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
-  if (!session?.orgId) return Response.json({ error: "unauthorized" }, { status: 401 });
+  // Fail-closed: no org or no manage-team role → deny.
+  if (!session?.orgId || !canManageTeam(session.role)) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
   const db = supabaseServer();
   const { data, error } = await db.from("invites").select("*").eq("org_id", session.orgId).order("created_at", { ascending: false });
   if (error) return Response.json({ error: error.message }, { status: 500 });
