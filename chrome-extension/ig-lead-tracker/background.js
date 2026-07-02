@@ -438,6 +438,29 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         break;
       }
 
+      // Compare the installed version against the build published on the
+      // dashboard (public/extension/latest.json) so the sidepanel can nudge.
+      case "CHECK_UPDATE": {
+        try {
+          const resp = await fetch(`${dashboardUrl}/extension/latest.json`, { cache: "no-store" });
+          const data = await resp.json().catch(() => null);
+          const current = chrome.runtime.getManifest().version;
+          const latest = data?.version || current;
+          const isNewer = (a, c) => {
+            const pa = a.split(".").map(Number), pc = c.split(".").map(Number);
+            for (let i = 0; i < Math.max(pa.length, pc.length); i++) {
+              const d = (pa[i] || 0) - (pc[i] || 0);
+              if (d) return d > 0;
+            }
+            return false;
+          };
+          sendResponse({ ok: true, current, latest, updateAvailable: isNewer(latest, current) });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+        break;
+      }
+
       // AE list for the booking pickers — who discovery calls get booked with.
       case "GET_AES": {
         try {

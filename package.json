@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "pack:ext": "bash scripts/pack-extension.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",

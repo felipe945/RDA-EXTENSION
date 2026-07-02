@@ -4,14 +4,15 @@ import { usePathname } from "next/navigation";
 import { useMode } from "@/components/ModeProvider";
 import { useSession, signIn, signOut } from "next-auth/react";
 import { useEffect, useState } from "react";
-import { LayoutGrid, Send, MessageSquare, BookOpen, Users } from "lucide-react";
+import { LayoutGrid, Send, MessageSquare, BookOpen, Users, Puzzle } from "lucide-react";
 
 const NAV_LINKS = [
-  { href: "/",              label: "Dashboard", icon: LayoutGrid },
-  { href: "/outreach",      label: "Outreach",  icon: Send },
-  { href: "/inbox",         label: "Inbox",     icon: MessageSquare },
-  { href: "/scripts",       label: "Scripts",   icon: BookOpen },
-  { href: "/settings/team", label: "Team",      icon: Users },
+  { href: "/",                   label: "Dashboard", icon: LayoutGrid },
+  { href: "/outreach",           label: "Outreach",  icon: Send },
+  { href: "/inbox",              label: "Inbox",     icon: MessageSquare },
+  { href: "/scripts",            label: "Scripts",   icon: BookOpen },
+  { href: "/settings/team",      label: "Team",      icon: Users },
+  { href: "/settings/extension", label: "Extension", icon: Puzzle },
 ];
 
 type NotifCounts = { overdue: number; replied: number; unread: number };

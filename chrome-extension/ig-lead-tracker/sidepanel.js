@@ -1542,3 +1542,16 @@ loadData().then(() => {
   });
 });
 
+
+// ── Update nudge — compares installed version to the dashboard's published build
+(async function checkExtensionUpdate() {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "CHECK_UPDATE" }).catch(() => null);
+    if (!res?.ok || !res.updateAvailable) return;
+    const { dashboardUrl } = await chrome.storage.sync.get({ dashboardUrl: "https://unified-sales-ops.vercel.app" });
+    document.getElementById("update-banner-text").textContent =
+      `Update available: v${res.latest} (you're on v${res.current})`;
+    document.getElementById("update-banner-link").href = `${dashboardUrl}/settings/extension`;
+    document.getElementById("update-banner").style.display = "flex";
+  } catch { /* never block the panel over a version check */ }
+})();
