@@ -9,7 +9,19 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { mintRepToken } from "@/lib/extension-token";
 import { supabaseServer } from "@/lib/supabase";
-import { getBaseUrl } from "@/lib/base-url";
+
+// Build the origin from the host the client actually hit (the stable alias
+// the extension calls), NOT getBaseUrl() — which resolves to Vercel's immutable
+// per-deployment URL. Bouncing /login to the immutable host would set the
+// session cookie on the wrong host, so a rep already signed into the dashboard
+// gets needlessly re-prompted (and a deployment-protected host could hard-block
+// the bounce). Staying on the caller's host reuses the existing session.
+function requestOrigin(req: NextRequest): string {
+  const proto = req.headers.get("x-forwarded-proto") ?? "https";
+  const host =
+    req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? req.nextUrl.host;
+  return `${proto}://${host}`;
+}
 
 function validExtRedirect(raw: string | null): URL | null {
   if (!raw) return null;
@@ -41,7 +53,7 @@ export async function GET(req: NextRequest) {
     // here with ext_redirect intact. Relative callbackUrl keeps NextAuth's
     // same-origin redirect check happy.
     const callbackUrl = `/api/extension/auth/start?ext_redirect=${encodeURIComponent(extRedirect.href)}`;
-    const login = new URL("/login", getBaseUrl());
+    const login = new URL("/login", requestOrigin(req));
     login.searchParams.set("callbackUrl", callbackUrl);
     return Response.redirect(login, 302);
   }
