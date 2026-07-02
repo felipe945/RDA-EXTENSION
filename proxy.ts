@@ -15,6 +15,10 @@
 //                            CLI/script callers, enforce their own `authorization` secret
 //   - /api/ai/research-lead  called server-to-server (Inngest fn + ig-events fallback), no cookie
 //   - /api/log               logging sink (may fire before a session exists)
+//   - /api/extension/*       Chrome extension: auth/start does its own session
+//                            check (and must redirect a fresh browser tab to
+//                            /login, not 401); bootstrap verifies the repToken
+//   - /api/calendar/*        Chrome extension, authenticates via repToken
 // These each authenticate themselves internally, so bypassing the session check
 // here does not expose data.
 import { getToken } from "next-auth/jwt";
@@ -29,6 +33,8 @@ const OPEN_API_PREFIXES = [
   "/api/salesforce/batch",
   "/api/ai/research-lead",
   "/api/log",
+  "/api/extension",
+  "/api/calendar",
 ];
 
 function isOpenApi(pathname: string): boolean {

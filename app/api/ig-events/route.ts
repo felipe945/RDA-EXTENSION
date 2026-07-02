@@ -3,6 +3,7 @@ import { z } from "zod";
 import { supabaseServer } from "@/lib/supabase";
 import { scoreLead } from "@/lib/scoring";
 import { inngest } from "@/lib/inngest";
+import { verifyRepToken } from "@/lib/extension-token";
 
 const igEventSchema = z.object({
   type: z.string(),
@@ -17,9 +18,16 @@ const igEventSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const secret = req.headers.get("x-ig-secret");
-  if (secret !== process.env.IG_EVENTS_SECRET) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  // C4 — preferred auth is the rep's Bearer repToken (stamps rep_id on every
+  // write). x-ig-secret stays as a fallback (rep_id null) so pre-CONNECT
+  // extensions keep working mid-rollout.
+  const rep = await verifyRepToken(req.headers.get("authorization"));
+  const repId = rep?.rep_id ?? null;
+  if (!rep) {
+    const secret = req.headers.get("x-ig-secret");
+    if (secret !== process.env.IG_EVENTS_SECRET) {
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    }
   }
 
   const rawBody = await req.json();
@@ -37,7 +45,7 @@ export async function POST(req: NextRequest) {
 
   if (type === "IG_PROFILE_SAVE") {
     const now = new Date().toISOString();
-    const saveEvent = { type, postUrl: profileUrl ?? pageUrl ?? null, ts: now };
+    const saveEvent = { type, postUrl: profileUrl ?? pageUrl ?? null, ts: now, rep_id: repId };
 
     // Find or create lead by IG username (fetch ig_events for append)
     const { data: existing } = await db
@@ -70,6 +78,7 @@ export async function POST(req: NextRequest) {
           updated_at: now,
           ig_user_id: userId ?? undefined,
           source_account: (body.savedFromAccount as string | undefined) ?? undefined,
+          rep_id: repId ?? undefined,
         })
         .eq("id", leadId);
     } else {
@@ -92,6 +101,9 @@ export async function POST(req: NextRequest) {
           ig_events: [saveEvent],
           due_at: dueAt,
           updated_at: now,
+          // key omitted when unauthenticated-by-token so the legacy x-ig-secret
+          // path keeps inserting during the deploy→migration-014 window
+          ...(repId ? { rep_id: repId } : {}),
         })
         .select("id")
         .maybeSingle();
@@ -134,7 +146,7 @@ export async function POST(req: NextRequest) {
     .eq("ig_username", username)
     .maybeSingle();
 
-  const event = { type, postUrl: pageUrl ?? null, ts: new Date().toISOString() };
+  const event = { type, postUrl: pageUrl ?? null, ts: new Date().toISOString(), rep_id: repId };
 
   if (existing) {
     const igEvents = Array.isArray(existing.ig_events) ? existing.ig_events : [];
@@ -143,6 +155,7 @@ export async function POST(req: NextRequest) {
       .update({
         ig_events: [...igEvents, event],
         updated_at: new Date().toISOString(),
+        rep_id: repId ?? undefined,
       })
       .eq("id", existing.id);
   } else {
@@ -156,6 +169,7 @@ export async function POST(req: NextRequest) {
       stage: type === "follow" ? "Warming" : "New",
       ig_events: [event],
       due_at: dueAt,
+      ...(repId ? { rep_id: repId } : {}),
     });
   }
 

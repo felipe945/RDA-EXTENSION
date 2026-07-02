@@ -8,6 +8,11 @@ import { Suspense } from "react";
 function LoginForm() {
   const params = useSearchParams();
   const error = params.get("error");
+  // Where to land after sign-in. Relative paths only (rejects absolute URLs)
+  // so this can't become an open redirect. The extension auth handoff
+  // (/api/extension/auth/start) round-trips through here with its own path.
+  const rawCallback = params.get("callbackUrl");
+  const callbackUrl = rawCallback?.startsWith("/") && !rawCallback.startsWith("//") ? rawCallback : "/";
 
   return (
     <div className="w-full max-w-sm rounded-xl border border-[#1A2235] bg-[#0F1420] p-8 text-center">
@@ -25,7 +30,7 @@ function LoginForm() {
         </p>
       )}
       <button
-        onClick={() => signIn("google", { callbackUrl: "/" })}
+        onClick={() => signIn("google", { callbackUrl })}
         className="w-full rounded-lg bg-[#FF3A69] px-4 py-2.5 text-sm font-medium text-white hover:opacity-90"
       >
         Sign in with Google

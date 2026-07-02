@@ -24,7 +24,9 @@ declare module "next-auth/jwt" {
   }
 }
 
-async function refreshAccessToken(token: import("next-auth/jwt").JWT) {
+// Exported for the repToken-authenticated calendar routes (lib/google-calendar.ts),
+// which refresh from user_integrations instead of a NextAuth session cookie.
+export async function refreshAccessToken(token: import("next-auth/jwt").JWT) {
   try {
     const res = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -57,7 +59,7 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
       authorization: {
         params: {
-          scope:       "openid email profile https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly",
+          scope:       "openid email profile https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.readonly",
           access_type: "offline",
           prompt:      "consent",
         },
@@ -114,6 +116,47 @@ export const authOptions: NextAuthOptions = {
           const { data: m } = await db
             .from("memberships").select("org_id, role").eq("user_id", u.id).maybeSingle();
           if (m) { token.orgId = m.org_id; token.role = m.role as "owner" | "admin" | "rep"; }
+        }
+      }
+
+      // Fresh Google grant — persist it server-side (user_integrations, type
+      // "google") so repToken-authenticated calendar routes can mint access
+      // tokens without a NextAuth cookie. Runs only on sign-in (account is
+      // undefined on session refreshes). Must never block sign-in itself.
+      if (account && token.userId) {
+        try {
+          const db = supabaseServer();
+          const { data: existing } = await db
+            .from("user_integrations")
+            .select("id, config")
+            .eq("user_id", token.userId)
+            .eq("integration_type", "google")
+            .maybeSingle();
+          const config = {
+            ...((existing?.config as Record<string, unknown>) ?? {}),
+            access_token: account.access_token,
+            expires_at:   account.expires_at,
+            scopes:       account.scope,
+            // prompt:"consent" means Google returns a refresh_token on every
+            // sign-in, but never clobber a stored one with undefined.
+            ...(account.refresh_token ? { refresh_token: account.refresh_token } : {}),
+          };
+          if (existing) {
+            await db.from("user_integrations")
+              .update({ config, is_connected: true, connected_at: new Date().toISOString() })
+              .eq("id", existing.id);
+          } else if (token.orgId) {
+            await db.from("user_integrations").insert({
+              team_id: token.orgId,
+              user_id: token.userId,
+              integration_type: "google",
+              config,
+              is_connected: true,
+              connected_at: new Date().toISOString(),
+            });
+          }
+        } catch (err) {
+          console.error("failed to persist google tokens to user_integrations", err);
         }
       }
 
