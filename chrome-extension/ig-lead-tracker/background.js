@@ -297,7 +297,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       // LinkedIn / Twitter content scripts fire this when they detect a reply
       case "CROSS_PLATFORM_REPLY": {
-        const { platform, detectedName, messagePreview } = msg;
+        const { platform, detectedName, messagePreview, itemId, threadId } = msg;
         const nameLower = (detectedName ?? "").toLowerCase().trim().replace(/\s+/g, " ");
 
         // Guard: refuse to match if name is too short — would match almost anything
@@ -323,7 +323,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         if (matched) {
           const now = new Date().toISOString();
 
-          // Record inbound message
+          // Record inbound message. item_id lets the server dedup the same reply
+          // detected by multiple reps on the shared account (null → plain insert).
           fetch(`${dashboardUrl}/api/messages`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -333,6 +334,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               direction: "inbound",
               body: messagePreview || null,
               created_at: now,
+              item_id: itemId ?? null,
+              thread_id: threadId ?? null,
             }),
           }).catch(() => {});
 
@@ -344,14 +347,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ id: matched.id, stage: "Replied" }),
             }).catch(() => {});
-            chrome.tabs.query({ url: "https://www.instagram.com/*" }, (tabs) => {
-              for (const tab of (tabs || [])) {
-                chrome.tabs.sendMessage(tab.id, { type: "LEAD_UPDATED", leadId: matched.id }).catch(() => {});
-              }
-            });
           }
 
-          const icon = { linkedin: "💼", twitter: "🐦" }[platform] || "💬";
+          // Broadcast on EVERY matched inbound (not just the first stage-flip) so
+          // follow-up replies from already-Replied leads still refresh open tabs.
+          chrome.tabs.query({ url: "https://www.instagram.com/*" }, (tabs) => {
+            for (const tab of (tabs || [])) {
+              chrome.tabs.sendMessage(tab.id, { type: "LEAD_UPDATED", leadId: matched.id }).catch(() => {});
+            }
+          });
+
+          const icon = { ig: "📸", linkedin: "💼", twitter: "🐦" }[platform] || "💬";
           chrome.notifications.create(`reply_${matched.id}_${Date.now()}`, {
             type: "basic",
             iconUrl: "icons/icon48.png",

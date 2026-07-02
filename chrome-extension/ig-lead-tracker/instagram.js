@@ -63,6 +63,71 @@
     }
   });
 
+  // ── Inbound reply relay (Contract R1 ig_reply → Contract R2 CROSS_PLATFORM_REPLY) ──
+
+  const SEEN_REPLIES_KEY = "fb_seenReplies"; // { [threadId]: { itemId, ts } }
+  const SEEN_REPLIES_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+  // Lowercased ig_username set of tracked leads, used to skip noise from
+  // random inbounds. null / empty = treat as not loaded and relay everything —
+  // background's matcher drops non-leads anyway, so over-relaying is safe
+  // while under-relaying (stale/failed fetch) would lose real replies.
+  let trackedHandles = null;
+
+  function refreshTrackedHandles() {
+    try {
+      chrome.runtime.sendMessage({ type: "GET_LEADS" }, (resp) => {
+        if (chrome.runtime.lastError) return;
+        const leads = resp?.leads;
+        if (!Array.isArray(leads)) return;
+        trackedHandles = new Set(
+          leads.map(l => (l.ig_username || "").toLowerCase()).filter(Boolean)
+        );
+      });
+    } catch { /* extension context gone — keep relay-all fallback */ }
+  }
+  refreshTrackedHandles();
+  setInterval(refreshTrackedHandles, 5 * 60 * 1000);
+
+  // Dedup must persist across service-worker restarts, so it lives in
+  // chrome.storage.local (the background's in-memory seenNotifIds does not
+  // survive). This only dedups within THIS browser; cross-rep duplicates are
+  // handled server-side via itemId, which is why itemId/threadId are forwarded.
+  async function handleIgReply(d) {
+    // Skip untracked handles BEFORE marking seen, so a reply arriving just
+    // before its lead is added isn't permanently suppressed.
+    if (trackedHandles && trackedHandles.size > 0 && !trackedHandles.has(d.username)) return;
+
+    const { [SEEN_REPLIES_KEY]: map = {} } =
+      await chrome.storage.local.get({ [SEEN_REPLIES_KEY]: {} });
+    if (map[d.threadId]?.itemId === d.itemId) return; // already relayed
+
+    const now = Date.now();
+    for (const [tid, entry] of Object.entries(map)) {
+      if (!entry?.ts || now - entry.ts > SEEN_REPLIES_MAX_AGE_MS) delete map[tid];
+    }
+    map[d.threadId] = { itemId: d.itemId, ts: now };
+    await chrome.storage.local.set({ [SEEN_REPLIES_KEY]: map });
+
+    chrome.runtime.sendMessage({
+      type: "CROSS_PLATFORM_REPLY",
+      platform: "ig",
+      detectedName: d.username,
+      messagePreview: d.text || "",
+      itemId: d.itemId,     // idempotency key for server-side cross-rep dedup
+      threadId: d.threadId, // idempotency key for server-side cross-rep dedup
+    }).catch(() => {});
+  }
+
+  // Serialize handling so a fast burst of events can't interleave the
+  // read-check-write against storage and double-relay the same item.
+  let replyChain = Promise.resolve();
+  document.addEventListener("ig_reply", (e) => {
+    const d = e.detail || {};
+    if (!d.username || !d.itemId || !d.threadId) return; // malformed → drop
+    replyChain = replyChain.then(() => handleIgReply(d)).catch(() => {});
+  });
+
   // ── Part 2: Floating lead card ─────────────────────────────────────────────
 
   const STAGES = ["New", "Warming", "DM Sent", "Replied", "Qualifying", "Call Offered", "Booked", "Closed", "DQ", "Active", "Churned"];
@@ -2486,6 +2551,7 @@
     }
     if (msg.type === "LEAD_UPDATED") {
       updateCardForProfile().catch(e => console.error("[FanBasis] card error:", e));
+      refreshTrackedHandles(); // keep the reply-relay prefilter current
     }
   });
 
