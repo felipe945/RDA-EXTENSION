@@ -1,8 +1,10 @@
 // C3 — open booking slots on the rep's calendar, computed server-side from
 // Google freeBusy using the same business-hours rules the extension used
 // (9:00–18:00 rep-local, no weekends, 15-min marks, ≥1h out).
+// Auth via getActor (PARITY wave): dashboard session OR extension repToken —
+// was repToken-only, which locked the dashboard out of real booking.
 import { type NextRequest } from "next/server";
-import { verifyRepToken } from "@/lib/extension-token";
+import { getActor } from "@/lib/scope";
 import {
   getGoogleAccess,
   fetchBusyRanges,
@@ -10,14 +12,14 @@ import {
 } from "@/lib/google-calendar";
 
 export async function GET(req: NextRequest) {
-  const rep = await verifyRepToken(req.headers.get("authorization"));
-  if (!rep) return Response.json({ ok: false }, { status: 401 });
+  const actor = await getActor(req);
+  if (!actor) return Response.json({ ok: false }, { status: 401 });
 
   const params = req.nextUrl.searchParams;
   const days = Math.min(Math.max(Number(params.get("days")) || 7, 1), 14);
   const slotMins = Math.min(Math.max(Number(params.get("slotMins")) || 30, 15), 120);
 
-  const access = await getGoogleAccess(rep.rep_id);
+  const access = await getGoogleAccess(actor.actorId);
   if (!access.ok) return Response.json({ ok: false, needsCalendar: true });
 
   try {
