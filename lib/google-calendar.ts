@@ -132,7 +132,9 @@ export function findOpenSlots(opts: {
 }): { start: string; end: string }[] {
   const slotMins = opts.slotMins || DEFAULT_SLOT_MINS;
   const days = opts.days || 7;
-  const maxSlots = opts.maxSlots || 5;
+  // No cap by default — the old 5-slot cap made everything past day one look
+  // booked solid in the dashboard month view.
+  const maxSlots = opts.maxSlots || Infinity;
   const slotMs = slotMins * 60 * 1000;
   const stepMs = 15 * 60 * 1000;
   const now = Date.now();
@@ -170,29 +172,62 @@ export function findOpenSlots(opts: {
 
 // ── Google Calendar REST ─────────────────────────────────────────────────────
 
-export async function fetchBusyRanges(
+type FreeBusyResponse = {
+  calendars?: Record<
+    string,
+    { busy?: { start: string; end: string }[]; errors?: { reason?: string }[] }
+  >;
+};
+
+// Shared freeBusy call. `calendarId` is "primary" (the actor's own calendar)
+// or an AE's email — readable across the Workspace domain via normal
+// free/busy sharing. CRITICAL: Google reports a calendar it can't read as
+// errors + empty busy, NOT as an HTTP failure — treating that as "fully
+// free" would fabricate availability, so it throws instead.
+async function freeBusyQuery(
   accessToken: string,
-  days: number
+  timeMin: string,
+  timeMax: string,
+  calendarId: string
 ): Promise<BusyRange[]> {
-  const timeMin = new Date().toISOString();
-  const timeMax = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
   const resp = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    // TODO shared-cal: swap "primary" for the shared FanBasis calendar id
-    body: JSON.stringify({ timeMin, timeMax, items: [{ id: "primary" }] }),
+    body: JSON.stringify({ timeMin, timeMax, items: [{ id: calendarId }] }),
   });
   if (!resp.ok) throw new Error(`freebusy_${resp.status}`);
-  const data = (await resp.json()) as {
-    calendars?: Record<string, { busy?: { start: string; end: string }[] }>;
-  };
+  const data = (await resp.json()) as FreeBusyResponse;
+
   const busy: BusyRange[] = [];
   for (const cal of Object.values(data.calendars ?? {})) {
+    if (cal.errors?.length) throw new Error("freebusy_unreadable");
     for (const b of cal.busy ?? []) {
       busy.push({ start: new Date(b.start).getTime(), end: new Date(b.end).getTime() });
     }
   }
   return busy;
+}
+
+export async function fetchBusyRanges(
+  accessToken: string,
+  days: number,
+  calendarId = "primary"
+): Promise<BusyRange[]> {
+  const timeMin = new Date().toISOString();
+  const timeMax = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+  return freeBusyQuery(accessToken, timeMin, timeMax, calendarId);
+}
+
+// Book-time freshness check: is this exact window still free? Guards against
+// a slot getting taken between the picker loading and the rep confirming.
+export async function isSlotBusy(
+  accessToken: string,
+  slotStart: string,
+  slotEnd: string,
+  calendarId = "primary"
+): Promise<boolean> {
+  const busy = await freeBusyQuery(accessToken, slotStart, slotEnd, calendarId);
+  return busy.length > 0;
 }
 
 // Mirrors CREATE_CALENDAR_EVENT in background.js (title format, tentative
@@ -204,21 +239,31 @@ export async function createCalendarEvent(opts: {
   leadName?: string;
   guestEmail?: string;
   repName?: string | null;
+  aeName?: string | null;
+  aeEmail?: string | null;
   timezone: string;
 }): Promise<{ eventId: string; htmlLink: string }> {
   const displayLead = (opts.leadName || "Lead").split(" ").slice(0, 2).join(" ");
-  const displayUser = (opts.repName || "FanBasis").split(" ")[0];
+  // The call is with the AE when one is chosen; the rep only hosts the hold.
+  const displayUser = (opts.aeName || opts.repName || "FanBasis").split(" ")[0];
+  const attendees = [
+    ...(opts.aeEmail ? [{ email: opts.aeEmail }] : []),
+    ...(opts.guestEmail ? [{ email: opts.guestEmail }] : []),
+  ];
   const body = {
     summary: `FanBasis Discovery: ${displayLead} X ${displayUser}`,
     start: { dateTime: opts.slotStart, timeZone: opts.timezone },
     end: { dateTime: opts.slotEnd, timeZone: opts.timezone },
     status: "tentative",
-    description: "Booking sent via FanBasis Sales Extension",
-    ...(opts.guestEmail ? { attendees: [{ email: opts.guestEmail }] } : {}),
+    description: opts.aeName
+      ? `Discovery call with ${opts.aeName}${opts.repName ? ` — booked by ${opts.repName}` : ""} via FanBasis Sales Ops`
+      : "Booking sent via FanBasis Sales Extension",
+    ...(attendees.length ? { attendees } : {}),
   };
   const resp = await fetch(
-    // TODO shared-cal: swap "primary" for the shared FanBasis calendar id
-    "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+    // Event lives on the rep's calendar; the AE + lead are attendees.
+    // sendUpdates=all so both actually receive the invite email.
+    "https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all",
     {
       method: "POST",
       headers: { Authorization: `Bearer ${opts.accessToken}`, "Content-Type": "application/json" },

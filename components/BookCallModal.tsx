@@ -10,8 +10,11 @@ import type { Lead } from "@/hooks/useLeads";
 // server-side (scope-checked) and deliberately leaves due_at alone.
 
 type Slot = { start: string; end: string };
+type Ae = { id: string; name: string; email: string; active: boolean };
 type Step = "date" | "time" | "confirm";
-type LoadState = "loading" | "ready" | "needsCalendar" | "error";
+type LoadState = "loading" | "ready" | "needsCalendar" | "aeUnreadable" | "error";
+
+const AE_STORAGE_KEY = "fb-book-ae";
 
 const SLOT_MINS = 30;
 const DAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
@@ -43,6 +46,9 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
 
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [slots, setSlots] = useState<Slot[]>([]);
+  // null = AE list still loading; [] = org has no AEs (fall back to own calendar)
+  const [aes, setAes] = useState<Ae[] | null>(null);
+  const [aeId, setAeId] = useState<string | null>(null);
   const [step, setStep] = useState<Step>("date");
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
@@ -54,29 +60,60 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
   const [done, setDone] = useState<{ htmlLink?: string; leadError?: string } | null>(null);
   const [dmCopied, setDmCopied] = useState(false);
 
+  // Who the call is with — availability comes from the chosen AE's calendar.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/calendar/slots?days=14&slotMins=${SLOT_MINS}`);
+        const res = await fetch("/api/aes");
         const data = (await res.json().catch(() => null)) as
-          | { ok: boolean; slots?: Slot[]; needsCalendar?: boolean }
+          | { ok: boolean; aes?: Ae[] }
           | null;
         if (cancelled) return;
-        if (data?.ok && data.slots) {
-          setSlots(data.slots);
-          setLoadState("ready");
-        } else if (data?.needsCalendar) {
-          setLoadState("needsCalendar");
-        } else {
-          setLoadState("error");
+        const list = (data?.ok ? data.aes ?? [] : []).filter((a) => a.active);
+        setAes(list);
+        if (list.length) {
+          const stored = localStorage.getItem(AE_STORAGE_KEY);
+          setAeId(list.some((a) => a.id === stored) ? stored : list[0].id);
         }
       } catch {
-        if (!cancelled) setLoadState("error");
+        if (!cancelled) setAes([]);
       }
     })();
     return () => { cancelled = true; };
   }, []);
+
+  const loadSlots = useCallback(async (forAe: string | null) => {
+    try {
+      const ae = forAe ? `&aeId=${forAe}` : "";
+      const res = await fetch(`/api/calendar/slots?days=14&slotMins=${SLOT_MINS}${ae}`);
+      const data = (await res.json().catch(() => null)) as
+        | { ok: boolean; slots?: Slot[]; needsCalendar?: boolean; error?: string }
+        | null;
+      if (data?.ok && data.slots) {
+        setSlots(data.slots);
+        setLoadState("ready");
+      } else if (data?.needsCalendar) {
+        setLoadState("needsCalendar");
+      } else if (data?.error === "ae_calendar_unreadable") {
+        setLoadState("aeUnreadable");
+      } else {
+        setLoadState("error");
+      }
+    } catch {
+      setLoadState("error");
+    }
+  }, []);
+
+  // (Re)load availability once the AE list has resolved, and on AE switch.
+  useEffect(() => {
+    if (aes === null) return;
+    setLoadState("loading");
+    setStep("date");
+    setSelectedKey(null);
+    setSelectedSlot(null);
+    void loadSlots(aeId);
+  }, [aes, aeId, loadSlots]);
 
   const slotsByDate = useMemo(() => {
     const map: Record<string, Slot[]> = {};
@@ -131,6 +168,7 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
           leadName: lead.name ?? lead.ig_username ?? "Lead",
           guestEmail: guestEmail.trim() || undefined,
           leadId: lead.id,
+          aeId: aeId ?? undefined,
         }),
       });
       const data = (await res.json().catch(() => null)) as
@@ -141,6 +179,15 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
         onBooked?.();
       } else if (data?.needsCalendar) {
         setLoadState("needsCalendar");
+      } else if (data?.error === "slot_taken") {
+        // That window filled up since the picker loaded — pull fresh
+        // availability and send them back to pick again.
+        setSelectedSlot(null);
+        setStep("time");
+        setBookError("That time was just taken — availability refreshed, pick another.");
+        void loadSlots(aeId);
+      } else if (data?.error === "ae_calendar_unreadable") {
+        setLoadState("aeUnreadable");
       } else {
         setBookError(data?.error === "forbidden" ? "This lead belongs to a teammate." : "Booking failed — try again.");
       }
@@ -149,7 +196,7 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [selectedSlot, saving, guestEmail, lead, onBooked]);
+  }, [selectedSlot, saving, guestEmail, lead, onBooked, loadSlots, aeId]);
 
   // ── Formatted display ────────────────────────────────────────────────────
   const selectedDate = selectedKey ? new Date(`${selectedKey}T00:00:00`) : null;
@@ -158,6 +205,12 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
     : "";
 
   const name = lead.ig_username ? `@${lead.ig_username}` : (lead.name ?? "Lead");
+  const currentAe = aes?.find((a) => a.id === aeId) ?? null;
+
+  function pickAe(id: string) {
+    localStorage.setItem(AE_STORAGE_KEY, id);
+    setAeId(id);
+  }
 
   const dmText = selectedSlot && selectedDate
     ? `Hey! Just sent a calendar invite for ${DAYS_LONG[selectedDate.getDay()]} ${MONTHS_SHORT[selectedDate.getMonth()]} ${selectedDate.getDate()} at ${fmtTime(selectedSlot.start)} — ${SLOT_MINS} min, no pressure. Let me know if that time works!`
@@ -200,11 +253,45 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
 
         <div className="p-5">
 
+          {/* ── AE selector — whose real availability the calendar shows ── */}
+          {!done && (aes?.length ?? 0) > 0 && (
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-xs flex-shrink-0" style={{ color: "#475569" }}>Call with</span>
+              <select
+                value={aeId ?? ""}
+                onChange={(e) => pickAe(e.target.value)}
+                aria-label="Account Executive for this call"
+                className="flex-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none"
+                style={{ background: "#151B2E", border: "1px solid #2A3554", color: "#E2E8F0" }}
+              >
+                {aes!.map((a) => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* ── Loading / calendar-not-connected / error ── */}
           {loadState === "loading" && (
             <div className="py-10 text-center">
               <span className="inline-block w-2 h-2 rounded-full animate-pulse" style={{ background: "#FF3A69" }} />
-              <p className="text-xs mt-3" style={{ color: "#475569" }}>Checking your Google Calendar…</p>
+              <p className="text-xs mt-3" style={{ color: "#475569" }}>
+                {currentAe ? `Checking ${currentAe.name}'s live availability…` : "Checking your Google Calendar…"}
+              </p>
+            </div>
+          )}
+
+          {loadState === "aeUnreadable" && (
+            <div className="py-8 text-center space-y-3">
+              <Calendar size={22} style={{ color: "#475569", margin: "0 auto" }} />
+              <p className="text-sm font-semibold" style={{ color: "#E2E8F0" }}>
+                Can&apos;t see {currentAe?.name ?? "this AE"}&apos;s calendar
+              </p>
+              <p className="text-xs leading-relaxed" style={{ color: "#475569" }}>
+                Their Google Calendar isn&apos;t sharing free/busy with your account. Ask them to enable
+                &quot;See only free/busy&quot; sharing for the fanbasis.com domain (Google Calendar → Settings),
+                or pick a different AE above.
+              </p>
             </div>
           )}
 
@@ -301,6 +388,10 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
                 <span className="text-xs font-medium" style={{ color: "#94A3B8" }}>Select a time</span>
               </div>
 
+              {bookError && (
+                <p className="text-xs mb-3" style={{ color: "#fbbf24" }}>{bookError}</p>
+              )}
+
               <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-1">
                 {(slotsByDate[selectedKey] ?? []).map(slot => (
                   <button
@@ -345,6 +436,12 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
                 <div className="pt-1" style={{ borderTop: "1px solid #1A2235" }}>
                   <span className="text-xs" style={{ color: "#475569" }}>with </span>
                   <span className="text-xs font-semibold" style={{ color: "#94A3B8" }}>{name}</span>
+                  {currentAe && (
+                    <>
+                      <span className="text-xs" style={{ color: "#475569" }}> · AE </span>
+                      <span className="text-xs font-semibold" style={{ color: "#94A3B8" }}>{currentAe.name}</span>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -360,7 +457,7 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
               />
 
               <p className="text-xs mb-4" style={{ color: "#475569" }}>
-                Creates a Google Calendar event and moves the lead to{" "}
+                Creates a Google Calendar event{currentAe ? ` and invites ${currentAe.name}` : ""}, then moves the lead to{" "}
                 <span style={{ color: "#22C55E", fontWeight: 600 }}>Booked</span>. Your follow-up date stays as-is.
               </p>
 

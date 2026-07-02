@@ -1088,6 +1088,18 @@
     b.style.display = "none";
     slotMins = slotMins || 45;
 
+    // The slots API no longer caps at 5 (that cap made the dashboard calendar
+    // look booked solid) — a week can now be 100+ open slots. Keep this quick
+    // picker short: up to 2 per day spread across the week, max 10 rows.
+    const byDay = {};
+    (slots || []).forEach(s => {
+      const key = new Date(s.start).toDateString();
+      (byDay[key] = byDay[key] || []).push(s);
+    });
+    slots = Object.values(byDay)
+      .flatMap(day => day.length > 1 ? [day[0], day[Math.floor(day.length / 2)]] : [day[0]])
+      .slice(0, 10);
+
     const picker = document.createElement("div");
     picker.style.cssText = "padding:12px 14px";
 

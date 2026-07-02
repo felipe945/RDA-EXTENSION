@@ -12,7 +12,7 @@ import { getActor } from "@/lib/scope";
 import { supabaseServer } from "@/lib/supabase";
 import { applyLeadPatch } from "@/lib/leads-update";
 import { getSupabaseErrorMessage } from "@/lib/supabaseError";
-import { getGoogleAccess, createCalendarEvent } from "@/lib/google-calendar";
+import { getGoogleAccess, createCalendarEvent, isSlotBusy } from "@/lib/google-calendar";
 
 const bookSchema = z.object({
   slotStart: z.string().min(1),
@@ -20,6 +20,7 @@ const bookSchema = z.object({
   leadName: z.string().optional(),
   guestEmail: z.string().email().optional(),
   leadId: z.string().uuid().optional(),
+  aeId: z.string().uuid().optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -50,6 +51,20 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Resolve the AE the call is with (availability + invite target).
+  let ae: { id: string; name: string; email: string } | null = null;
+  if (parsed.data.aeId) {
+    const { data } = await db
+      .from("account_executives")
+      .select("id, name, email")
+      .eq("id", parsed.data.aeId)
+      .eq("org_id", actor.orgId)
+      .eq("active", true)
+      .maybeSingle();
+    if (!data) return Response.json({ ok: false, error: "unknown_ae" }, { status: 404 });
+    ae = data;
+  }
+
   const access = await getGoogleAccess(actor.actorId);
   if (!access.ok) return Response.json({ ok: false, needsCalendar: true });
 
@@ -61,6 +76,14 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   try {
+    // Re-verify against Google right now — the picker's slot list may be
+    // minutes old and someone else may have taken this window since. When the
+    // call is with an AE, it's THEIR calendar that must still be free.
+    const availabilityCalendar = ae?.email ?? "primary";
+    if (await isSlotBusy(access.accessToken, parsed.data.slotStart, parsed.data.slotEnd, availabilityCalendar)) {
+      return Response.json({ ok: false, error: "slot_taken" }, { status: 409 });
+    }
+
     const { eventId, htmlLink } = await createCalendarEvent({
       accessToken: access.accessToken,
       slotStart: parsed.data.slotStart,
@@ -68,6 +91,8 @@ export async function POST(req: NextRequest) {
       leadName: parsed.data.leadName,
       guestEmail: parsed.data.guestEmail,
       repName: (user?.name as string | null) ?? null,
+      aeName: ae?.name ?? null,
+      aeEmail: ae?.email ?? null,
       timezone: access.timezone,
     });
 
@@ -89,8 +114,11 @@ export async function POST(req: NextRequest) {
 
     return Response.json({ ok: true, eventId, htmlLink, lead });
   } catch (err) {
-    if (err instanceof Error && err.message === "create_event_401") {
+    if (err instanceof Error && (err.message === "create_event_401" || err.message === "freebusy_401")) {
       return Response.json({ ok: false, needsCalendar: true });
+    }
+    if (err instanceof Error && err.message === "freebusy_unreadable") {
+      return Response.json({ ok: false, error: "ae_calendar_unreadable" }, { status: 409 });
     }
     console.error("calendar book failed", err);
     return Response.json({ ok: false, error: "booking_failed" }, { status: 502 });
