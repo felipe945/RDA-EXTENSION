@@ -13,10 +13,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Gmail session expired — sign in again" }, { status: 401 });
   }
 
-  const { to, subject, body, leadId, threadId } = await req.json() as {
+  const { to, subject, body, html, leadId, threadId } = await req.json() as {
     to: string;
     subject: string;
     body: string;
+    html?: string;
     leadId?: string;
     threadId?: string;
   };
@@ -25,15 +26,35 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing to, subject, or body" }, { status: 400 });
   }
 
-  // Build RFC 2822 message
+  // Build RFC 2822 message. When `html` is provided the message becomes
+  // multipart/alternative with `body` as the plain-text fallback; callers that
+  // send only `body` get the same single-part message as before.
   const lines = [
     `To: ${to}`,
     `Subject: ${subject}`,
-    `Content-Type: text/plain; charset=utf-8`,
     `MIME-Version: 1.0`,
   ];
   if (threadId) lines.push(`In-Reply-To: ${threadId}`, `References: ${threadId}`);
-  lines.push("", body);
+  if (html) {
+    const boundary = "=_sales_ops_" + Math.random().toString(36).slice(2);
+    lines.push(
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      "",
+      `--${boundary}`,
+      `Content-Type: text/plain; charset=utf-8`,
+      "",
+      body,
+      "",
+      `--${boundary}`,
+      `Content-Type: text/html; charset=utf-8`,
+      "",
+      html,
+      "",
+      `--${boundary}--`,
+    );
+  } else {
+    lines.push(`Content-Type: text/plain; charset=utf-8`, "", body);
+  }
 
   const raw = Buffer.from(lines.join("\r\n"))
     .toString("base64")

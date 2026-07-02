@@ -49,15 +49,43 @@ export function useTeam() {
         body: JSON.stringify({ email, role }),
       });
       const data = (await res.json().catch(() => ({}))) as {
-        ok?: boolean; inviteUrl?: string; error?: string;
+        ok?: boolean; inviteUrl?: string; emailSent?: boolean; error?: string;
       };
       await refresh();
       if (!res.ok) return { ok: false, error: data.error ?? `HTTP ${res.status}` };
-      return { ok: data.ok ?? true, inviteUrl: data.inviteUrl, error: data.error };
+      return { ok: data.ok ?? true, inviteUrl: data.inviteUrl, emailSent: data.emailSent ?? false, error: data.error };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : "Network error" };
     }
   }
 
-  return { members, invites, loading, sendInvite, refresh };
+  // Re-email the invite and extend its expiry 7 days from now.
+  async function resendInvite(id: string) {
+    try {
+      const res = await fetch(`/api/invites/${id}`, { method: "POST" });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean; inviteUrl?: string; emailSent?: boolean; error?: string;
+      };
+      await refresh();
+      if (!res.ok) return { ok: false, error: data.error ?? `HTTP ${res.status}` };
+      return { ok: true, inviteUrl: data.inviteUrl, emailSent: data.emailSent ?? false };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : "Network error" };
+    }
+  }
+
+  // Revoke: the row is deleted, so the emailed link stops working immediately.
+  async function revokeInvite(id: string) {
+    try {
+      const res = await fetch(`/api/invites/${id}`, { method: "DELETE" });
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      await refresh();
+      if (!res.ok) return { ok: false, error: data.error ?? `HTTP ${res.status}` };
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : "Network error" };
+    }
+  }
+
+  return { members, invites, loading, sendInvite, resendInvite, revokeInvite, refresh };
 }

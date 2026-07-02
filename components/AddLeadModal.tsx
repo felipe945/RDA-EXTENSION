@@ -56,10 +56,10 @@ export default function AddLeadModal({ onClose, onAdded }: {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-      <div className="relative bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md mx-4 space-y-4">
+      <div className="relative bg-[#0F1420] border border-[#1A2235] rounded-2xl p-6 w-full max-w-md mx-4 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-white">Add Lead</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-xl leading-none">&times;</button>
+          <button onClick={onClose} className="text-[#5B6B8C] hover:text-[#E2E8F0] transition-colors text-xl leading-none">&times;</button>
         </div>
 
         <form onSubmit={submit} className="space-y-3">
@@ -75,24 +75,24 @@ export default function AddLeadModal({ onClose, onAdded }: {
             onChange={v => set("linkedin_url", v)} />
 
           <div>
-            <label className="text-xs text-gray-500 uppercase tracking-wide block mb-1">Source</label>
+            <label className="text-xs text-[#5B6B8C] uppercase tracking-wide block mb-1">Source</label>
             <select
               value={form.source}
               onChange={e => set("source", e.target.value)}
-              className="w-full text-sm bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 outline-none"
+              className="w-full text-sm bg-[#151B2E] border border-[#1A2235] rounded-lg px-3 py-2 text-[#E2E8F0] outline-none focus:border-[#2A3554]"
             >
               {SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
 
           <div>
-            <label className="text-xs text-gray-500 uppercase tracking-wide block mb-1">Notes</label>
+            <label className="text-xs text-[#5B6B8C] uppercase tracking-wide block mb-1">Notes</label>
             <textarea value={form.notes} onChange={e => set("notes", e.target.value)}
               rows={2} placeholder="How you know them, what they mentioned..."
-              className="w-full text-sm bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 outline-none resize-none" />
+              className="w-full text-sm bg-[#151B2E] border border-[#1A2235] rounded-lg px-3 py-2 text-[#E2E8F0] outline-none focus:border-[#2A3554] resize-none" />
           </div>
 
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p className="text-xs text-[#FCA5C0]">{error}</p>}
 
           <button type="submit" disabled={saving}
             className="w-full py-2.5 bg-[#FF3A69] hover:bg-[#e03060] text-white font-semibold rounded-lg text-sm transition-colors disabled:opacity-50">
@@ -110,10 +110,10 @@ function Field({ label, placeholder, value, onChange, type = "text" }: {
 }) {
   return (
     <div>
-      <label className="text-xs text-gray-500 uppercase tracking-wide block mb-1">{label}</label>
+      <label className="text-xs text-[#5B6B8C] uppercase tracking-wide block mb-1">{label}</label>
       <input type={type} placeholder={placeholder} value={value}
         onChange={e => onChange(e.target.value)}
-        className="w-full text-sm bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 outline-none focus:border-gray-500" />
+        className="w-full text-sm bg-[#151B2E] border border-[#1A2235] rounded-lg px-3 py-2 text-[#E2E8F0] outline-none focus:border-[#2A3554]" />
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { supabaseServer } from "@/lib/supabase";
 import { canManageTeam } from "@/lib/permissions";
 import { getBaseUrl } from "@/lib/base-url";
+import { buildInviteEmail } from "@/lib/invite-email";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -26,7 +27,7 @@ export async function POST(req: NextRequest) {
   const { data: invite, error } = await db
     .from("invites")
     .insert({ org_id: session.orgId, email, role: role ?? "rep", invited_by: session.userId })
-    .select("token")
+    .select("token, role, expires_at")
     .single();
   if (error) return Response.json({ error: error.message }, { status: 500 });
 
@@ -34,6 +35,13 @@ export async function POST(req: NextRequest) {
   // Forward the inviter's session cookie so gmail/send can authenticate as them
   // (it gates on session.access_token, which only exists on the cookie's session).
   const inviteUrl = `${getBaseUrl()}/login?invite=${invite!.token}`;
+  const { subject, text, html } = buildInviteEmail({
+    inviterName: session.user?.name ?? session.user?.email ?? "A teammate",
+    role: invite!.role,
+    email,
+    inviteUrl,
+    expiresAt: invite!.expires_at,
+  });
   let emailSent = false;
   try {
     const res = await fetch(`${getBaseUrl()}/api/gmail/send`, {
@@ -42,11 +50,7 @@ export async function POST(req: NextRequest) {
         "Content-Type": "application/json",
         cookie: req.headers.get("cookie") ?? "",
       },
-      body: JSON.stringify({
-        to: email,
-        subject: "You're invited to Unified Sales Ops",
-        body: `Sign in with Google to join: ${inviteUrl}`,
-      }),
+      body: JSON.stringify({ to: email, subject, body: text, html }),
     });
     emailSent = res.ok;
   } catch {

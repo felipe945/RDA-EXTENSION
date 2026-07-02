@@ -15,6 +15,8 @@
 //                            CLI/script callers, enforce their own `authorization` secret
 //   - /api/ai/research-lead  called server-to-server (Inngest fn + ig-events fallback), no cookie
 //   - /api/log               logging sink (may fire before a session exists)
+//   - /api/invites/preview   login-page invite lookup; the visitor isn't signed
+//                            in yet — the uuid invite token is the credential
 //   - /api/extension/*       Chrome extension: auth/start does its own session
 //                            check (and must redirect a fresh browser tab to
 //                            /login, not 401); bootstrap verifies the repToken
@@ -33,6 +35,7 @@ const OPEN_API_PREFIXES = [
   "/api/salesforce/batch",
   "/api/ai/research-lead",
   "/api/log",
+  "/api/invites/preview",
   "/api/extension",
   "/api/calendar",
 ];

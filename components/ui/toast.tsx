@@ -30,11 +30,12 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     setTimeout(() => setItems((prev) => prev.filter((t) => t.id !== id)), 3500);
   }, []);
 
+  // App design tokens (see globals/Nav palette), not tailwind's stock grays.
   const VARIANT_STYLES: Record<ToastVariant, string> = {
-    success: "bg-green-900/90 border-green-700 text-green-200",
-    error:   "bg-red-900/90 border-red-700 text-red-200",
-    info:    "bg-gray-800/90 border-gray-700 text-gray-200",
-    warning: "bg-amber-900/90 border-amber-700 text-amber-200",
+    success: "bg-[#0B2A26]/95 border-[#14B8A6]/40 text-[#5EEAD4]",
+    error:   "bg-[#2A1420]/95 border-[#FF3A69]/40 text-[#FCA5C0]",
+    info:    "bg-[#151B2E]/95 border-[#2A3554] text-[#E2E8F0]",
+    warning: "bg-[#2A2012]/95 border-[#d4892a]/40 text-[#E0B476]",
   };
 
   return (
@@ -44,6 +45,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         {items.map((t) => (
           <div
             key={t.id}
+            role={t.variant === "error" ? "alert" : "status"}
             className={cn(
               "px-4 py-2.5 rounded-lg border text-sm font-medium shadow-lg backdrop-blur-sm animate-in fade-in slide-in-from-bottom-2 duration-200",
               VARIANT_STYLES[t.variant],
