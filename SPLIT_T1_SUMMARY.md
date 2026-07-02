@@ -1,12 +1,12 @@
-# SPLIT · T1 SERVER — SHIPPED (commit e4ce654)
+# SPLIT · T1 SERVER — SHIPPED (commit e4ce654) · migration 016 APPLIED
 
-All contracts C1–C6 are live and curl-verified (minted rep + admin repTokens against local dev + prod DB). Build clean.
+All contracts C1–C6 are live and curl-verified (minted rep + admin repTokens against local dev + prod DB). Build clean. Migration 016 applied by Felipe 2026-07-02; snooze write + C1 exposure + null-clear re-verified end-to-end.
 
 ## Status vs contracts
 - **C1** ✅ `GET /api/leads` org+role scoped; admin rows include `owner_name` (rep rows don't). `snoozed_until` appears once migration 016 is applied.
 - **C2** ✅ `applyLeadPatch(db, id, fields, actor)` — scope check (403 outside scope, 404 missing), stamps `owner_id` on stage→`DM Sent`/`Replied` when null. Verified: rep PATCH on cold lead stamped rep; owned-by-other → 403.
 - **C3** ✅ `POST /api/leads/[id]/assign` `{owner_id: userId|null}` — admin only (rep → 403), validates member-of-org, audits to `assignment_log`.
-- **C4** ✅ `POST /api/leads/[id]/snooze` `{until: ISO|null}` — scoped like C2. **Blocked on migration 016** for the actual write (route correctly errors "snoozed_until column not found" today).
+- **C4** ✅ `POST /api/leads/[id]/snooze` `{until: ISO|null}` — scoped like C2. Migration 016 applied; write, C1 exposure, and null-clear verified live.
 - **C5** ✅ `PATCH /api/leads/[id]` accepts Bearer repToken now (was session-only), no stage whitelist, C2 stamping runs.
 - **C6** ✅ `GET /api/stats/reps` admin-only → `{reps: [{rep_id, name, role, owned, saved, dmSent, replied, qualifying, callOffered, booked, closed}]}`. `saved` = leads with that `rep_id`.
 
@@ -20,5 +20,5 @@ All contracts C1–C6 are live and curl-verified (minted rep + admin repTokens a
 7. C7 confirmed: canonical IG profile link = `https://www.instagram.com/<handle>/`.
 
 ## Integration (T1 drives)
-1. **Felipe: apply `supabase/migrations/016_ownership_snooze.sql`** in the SQL editor (additive: `snoozed_until` + 2 indexes). Live schema was diffed first: `owner_id`/`rep_id`/`org_id` all present, all 627 leads have `org_id`, only `snoozed_until` missing.
-2. Re-run snooze curl → then joint end-to-end with T2.
+1. ~~Apply migration 016~~ ✅ applied + re-verified 2026-07-02.
+2. Joint end-to-end with T2 once the UI half lands.
