@@ -547,6 +547,7 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
   const leadName = lead?.name || (lead?.ig_username ? `@${lead.ig_username}` : "Lead");
   const aeName = () => aes.find(a => a.id === currentAeId)?.name || null;
   const offerPicks = []; // availability mode: slots chosen to offer (max 3)
+  let lateTimes = false; // calls normally end by 6:15 PM; override extends to 8 PM
 
   // Group slots by LOCAL date key "YYYY-MM-DD" (the raw ISO string is UTC —
   // splitting it puts evening slots under the wrong day for western reps).
@@ -585,27 +586,32 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
     aeBar.id = "sp-ae-bar";
     modal.insertBefore(aeBar, body);
   }
-  if (aes.length) {
-    aeBar.style.cssText = "display:flex;align-items:center;gap:8px;padding:10px 18px 0";
-    aeBar.innerHTML = `
+  function renderAeBar() {
+    const aeSelect = aes.length ? `
       <span style="font-size:11px;color:#475569;flex-shrink:0">Call with</span>
       <select id="sp-ae-select" aria-label="Account Executive for this call"
         style="flex:1;padding:6px 8px;background:#151B2E;border:1px solid #2A3554;border-radius:8px;color:#E2E8F0;font-size:12px;font-weight:600;outline:none;cursor:pointer">
         ${aes.map(a => `<option value="${a.id}" ${a.id === currentAeId ? "selected" : ""}>${esc(a.name)}</option>`).join("")}
-      </select>`;
-    document.getElementById("sp-ae-select").onchange = (e) => switchAe(e.target.value);
-  } else {
-    aeBar.style.cssText = "display:none";
-    aeBar.innerHTML = "";
+      </select>` : "";
+    aeBar.style.cssText = "display:flex;align-items:center;gap:8px;padding:10px 18px 0;flex-wrap:wrap";
+    aeBar.innerHTML = `${aeSelect}
+      <button id="sp-late-toggle" title="Calls normally end by 6:15 PM — allow up to 8 PM"
+        style="flex-shrink:0;padding:5px 9px;border-radius:8px;font-size:10.5px;font-weight:600;cursor:pointer;background:${lateTimes ? "#2a1f38" : "#151B2E"};border:1px solid ${lateTimes ? "#7c3aed" : "#2A3554"};color:${lateTimes ? "#c4b5fd" : "#475569"}">🌙 Late</button>`;
+    const sel = document.getElementById("sp-ae-select");
+    if (sel) sel.onchange = (e) => switchAe(e.target.value);
+    document.getElementById("sp-late-toggle").onclick = () => {
+      lateTimes = !lateTimes;
+      renderAeBar();
+      refetchSlots();
+    };
   }
+  renderAeBar();
 
-  async function switchAe(id) {
-    currentAeId = id;
-    chrome.storage.sync.set({ selectedAeId: id }).catch(() => {});
-    offerPicks.length = 0; // picked times belong to the previous AE's calendar
+  async function refetchSlots() {
+    offerPicks.length = 0; // picked times belong to the previous slot window
     setStep(1);
     body.innerHTML = `<div style="padding:34px 0;text-align:center;color:#475569;font-size:12px">Checking ${esc(aeName() || "your")}${aeName() ? "’s" : ""} live availability…</div>`;
-    const res = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: id }).catch(() => null);
+    const res = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: currentAeId, late: lateTimes }).catch(() => null);
     if (res?.ok) {
       slotsByDate = groupSlots(res.slots);
       availDates = new Set(Object.keys(slotsByDate));
@@ -615,6 +621,12 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
     } else {
       body.innerHTML = `<div style="padding:34px 0;text-align:center;color:#475569;font-size:12px">Couldn’t load availability — close and try again.</div>`;
     }
+  }
+
+  async function switchAe(id) {
+    currentAeId = id;
+    if (id) chrome.storage.sync.set({ selectedAeId: id }).catch(() => {});
+    await refetchSlots();
   }
 
   function renderUnreadable() {

@@ -94,10 +94,11 @@ export async function getGoogleAccess(repId: string): Promise<GoogleAccess> {
 }
 
 // ── Open-slot computation ────────────────────────────────────────────────────
-// Port of calFindOpenSlots in chrome-extension/ig-lead-tracker/background.js:
-// slots start ≥1h from now on 15-min marks, business hours 9:00–18:00, no
-// weekends, skipping busy ranges. The extension used the rep machine's local
-// clock; server-side we evaluate business hours in the rep's timezone.
+// Slots start ≥1h from now on 15-min marks, no weekends, skipping busy ranges.
+// Call-hours rule (Felipe, 2026-07-02): calls start 9:00 AM at the earliest
+// and must END by 6:15 PM — unless afterHours is set (explicit override in the
+// pickers), which extends the end cap to 8:00 PM. Hours are evaluated in the
+// rep's timezone.
 
 interface BusyRange {
   start: number;
@@ -129,6 +130,7 @@ export function findOpenSlots(opts: {
   slotMins?: number;
   days?: number;
   maxSlots?: number;
+  afterHours?: boolean;
 }): { start: string; end: string }[] {
   const slotMins = opts.slotMins || DEFAULT_SLOT_MINS;
   const days = opts.days || 7;
@@ -145,6 +147,10 @@ export function findOpenSlots(opts: {
   const endTs = now + days * 24 * 60 * 60 * 1000;
   const slots: { start: string; end: string }[] = [];
 
+  // Latest allowed slot END: 6:15 PM normally, 8:00 PM with the override.
+  const endHour = opts.afterHours ? 20 : 18;
+  const endMinute = opts.afterHours ? 0 : 15;
+
   while (cursor < endTs && slots.length < maxSlots) {
     const at = clock(cursor);
     if (at.weekend || at.hour < 9) {
@@ -153,7 +159,11 @@ export function findOpenSlots(opts: {
     }
     const slotEndTs = cursor + slotMs;
     const atEnd = clock(slotEndTs);
-    if (atEnd.hour > 18 || (atEnd.hour === 18 && atEnd.minute > 0) || atEnd.hour < at.hour) {
+    if (
+      atEnd.hour > endHour ||
+      (atEnd.hour === endHour && atEnd.minute > endMinute) ||
+      atEnd.hour < at.hour
+    ) {
       cursor += stepMs;
       continue;
     }

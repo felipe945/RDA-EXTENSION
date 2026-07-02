@@ -21,6 +21,8 @@ export async function GET(req: NextRequest) {
   const days = Math.min(Math.max(Number(params.get("days")) || 7, 1), 14);
   const slotMins = Math.min(Math.max(Number(params.get("slotMins")) || 30, 15), 120);
   const aeId = params.get("aeId");
+  // Late-times override: calls normally end by 6:15 PM; late=1 extends to 8 PM.
+  const afterHours = params.get("late") === "1";
 
   // Availability source: the chosen AE's calendar, else the rep's own.
   let calendarId = "primary";
@@ -43,7 +45,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const busy = await fetchBusyRanges(access.accessToken, days, calendarId);
-    const slots = findOpenSlots({ busy, timezone: access.timezone, slotMins, days });
+    const slots = findOpenSlots({ busy, timezone: access.timezone, slotMins, days, afterHours });
     return Response.json({ ok: true, slots, ae });
   } catch (err) {
     // A 401 from Google here means the grant died between refresh and use —

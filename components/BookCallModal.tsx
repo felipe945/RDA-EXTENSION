@@ -53,6 +53,8 @@ export default function BookCallModal({ lead, onClose, onBooked, mode = "book" }
   // null = AE list still loading; [] = org has no AEs (fall back to own calendar)
   const [aes, setAes] = useState<Ae[] | null>(null);
   const [aeId, setAeId] = useState<string | null>(null);
+  // Calls normally end by 6:15 PM — this override extends the window to 8 PM.
+  const [lateTimes, setLateTimes] = useState(false);
   const [step, setStep] = useState<Step>("date");
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
@@ -90,10 +92,10 @@ export default function BookCallModal({ lead, onClose, onBooked, mode = "book" }
     return () => { cancelled = true; };
   }, []);
 
-  const loadSlots = useCallback(async (forAe: string | null) => {
+  const loadSlots = useCallback(async (forAe: string | null, late: boolean) => {
     try {
       const ae = forAe ? `&aeId=${forAe}` : "";
-      const res = await fetch(`/api/calendar/slots?days=14&slotMins=${SLOT_MINS}${ae}`);
+      const res = await fetch(`/api/calendar/slots?days=14&slotMins=${SLOT_MINS}${ae}${late ? "&late=1" : ""}`);
       const data = (await res.json().catch(() => null)) as
         | { ok: boolean; slots?: Slot[]; needsCalendar?: boolean; error?: string }
         | null;
@@ -112,16 +114,17 @@ export default function BookCallModal({ lead, onClose, onBooked, mode = "book" }
     }
   }, []);
 
-  // (Re)load availability once the AE list has resolved, and on AE switch.
+  // (Re)load availability once the AE list has resolved, on AE switch, and
+  // when the late-times override flips.
   useEffect(() => {
     if (aes === null) return;
     setLoadState("loading");
     setStep("date");
     setSelectedKey(null);
     setSelectedSlot(null);
-    setOfferPicks([]); // picked times belong to the previous AE's calendar
-    void loadSlots(aeId);
-  }, [aes, aeId, loadSlots]);
+    setOfferPicks([]); // picked times belong to the previous slot window
+    void loadSlots(aeId, lateTimes);
+  }, [aes, aeId, lateTimes, loadSlots]);
 
   const slotsByDate = useMemo(() => {
     const map: Record<string, Slot[]> = {};
@@ -193,7 +196,7 @@ export default function BookCallModal({ lead, onClose, onBooked, mode = "book" }
         setSelectedSlot(null);
         setStep("time");
         setBookError("That time was just taken — availability refreshed, pick another.");
-        void loadSlots(aeId);
+        void loadSlots(aeId, lateTimes);
       } else if (data?.error === "ae_calendar_unreadable") {
         setLoadState("aeUnreadable");
       } else {
@@ -204,7 +207,7 @@ export default function BookCallModal({ lead, onClose, onBooked, mode = "book" }
     } finally {
       setSaving(false);
     }
-  }, [selectedSlot, saving, guestEmail, lead, onBooked, loadSlots, aeId]);
+  }, [selectedSlot, saving, guestEmail, lead, onBooked, loadSlots, aeId, lateTimes]);
 
   // ── Formatted display ────────────────────────────────────────────────────
   const selectedDate = selectedKey ? new Date(`${selectedKey}T00:00:00`) : null;
@@ -354,6 +357,22 @@ export default function BookCallModal({ lead, onClose, onBooked, mode = "book" }
                 ))}
               </select>
             </div>
+          )}
+
+          {/* ── Late-times override — calls normally end by 6:15 PM ── */}
+          {!done && (
+            <label className="flex items-center gap-2 mb-4 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={lateTimes}
+                onChange={(e) => setLateTimes(e.target.checked)}
+                className="cursor-pointer"
+                style={{ accentColor: "#FF3A69" }}
+              />
+              <span className="text-xs" style={{ color: lateTimes ? "#94A3B8" : "#475569" }}>
+                🌙 Late times — allow calls past 6:15 PM
+              </span>
+            </label>
           )}
 
           {/* ── Loading / calendar-not-connected / error ── */}

@@ -1098,14 +1098,29 @@
 
   // mode "avail" = pick up to 3 times to OFFER in a DM; mode "book" = pick the
   // ONE confirmed time and create the event. Same list, different job.
-  function showSlotPicker(card, b, username, lead, dashboardUrl, slots, slotMins, aes, aeId, notice, mode) {
+  function showSlotPicker(card, b, username, lead, dashboardUrl, slots, slotMins, aes, aeId, notice, mode, late) {
     mode = mode || "avail";
     const booking = mode === "book";
+    const lateOn = !!late; // calls normally end by 6:15 PM; 🌙 extends to 8 PM
     b.style.display = "none";
     slotMins = slotMins || 45;
     aes = aes || [];
     const currentAeId = aeId || null;
     const currentAe = aes.find(a => a.id === currentAeId) || null;
+
+    // Re-fetch slots with new AE/late settings and rebuild this picker in place.
+    async function refetchPicker(nextAeId, nextLate) {
+      const res = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: nextAeId, late: nextLate }).catch(() => null);
+      picker.remove();
+      if (res?.ok) {
+        showSlotPicker(card, b, username, lead, dashboardUrl, res.slots, res.slotMins, aes, nextAeId, null, mode, nextLate);
+      } else if (res?.error === "ae_calendar_unreadable") {
+        showSlotPicker(card, b, username, lead, dashboardUrl, [], slotMins, aes, nextAeId,
+          "Can't see this AE's calendar — ask them to share free/busy, or pick another.", mode, nextLate);
+      } else {
+        b.style.display = "";
+      }
+    }
 
     // The slots API no longer caps at 5 (that cap made the dashboard calendar
     // look booked solid) — two weeks can be 100+ open slots. Keep this quick
@@ -1129,7 +1144,13 @@
     hdr.innerHTML = `
       <span style="width:7px;height:7px;border-radius:50%;background:#4285F4;display:inline-block;flex-shrink:0"></span>
       <span style="font-size:10px;font-weight:700;color:#93c5fd;letter-spacing:.04em">${slotMins}-min slots for <span style="color:#e2e8f0">${leadDisplayName}</span></span>
+      <button class="fb-late-btn" title="Calls normally end by 6:15 PM — allow up to 8 PM"
+        style="margin-left:auto;flex-shrink:0;background:${lateOn ? "#2a1f38" : "#111118"};border:1px solid ${lateOn ? "#7c3aed" : "#1e1e2e"};border-radius:6px;color:${lateOn ? "#c4b5fd" : "#6e7280"};font-size:10px;font-weight:600;padding:3px 7px;cursor:pointer">🌙 Late</button>
     `;
+    hdr.querySelector(".fb-late-btn").addEventListener("click", async (e) => {
+      e.target.disabled = true;
+      await refetchPicker(currentAeId, !lateOn);
+    });
     picker.appendChild(hdr);
 
     // AE row — the slot list below is THIS person's live availability
@@ -1145,16 +1166,7 @@
         const id = e.target.value;
         chrome.storage.sync.set({ selectedAeId: id }).catch(() => {});
         e.target.disabled = true;
-        const res = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: id }).catch(() => null);
-        picker.remove();
-        if (res?.ok) {
-          showSlotPicker(card, b, username, lead, dashboardUrl, res.slots, res.slotMins, aes, id, null, mode);
-        } else if (res?.error === "ae_calendar_unreadable") {
-          showSlotPicker(card, b, username, lead, dashboardUrl, [], slotMins, aes, id,
-            "Can't see this AE's calendar — ask them to share free/busy, or pick another.", mode);
-        } else {
-          b.style.display = "";
-        }
+        await refetchPicker(id, lateOn);
       });
       picker.appendChild(aeRow);
     }

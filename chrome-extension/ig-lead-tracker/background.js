@@ -425,7 +425,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           if (!bearer.Authorization) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
           const slotMins = settings.slotMins || 30;
           const ae = msg.aeId ? `&aeId=${msg.aeId}` : "";
-          const resp = await fetch(`${dashboardUrl}/api/calendar/slots?days=14&slotMins=${slotMins}${ae}`, { headers: bearer });
+          const late = msg.late ? "&late=1" : "";
+          const resp = await fetch(`${dashboardUrl}/api/calendar/slots?days=14&slotMins=${slotMins}${ae}${late}`, { headers: bearer });
           if (resp.status === 401) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
           const data = await resp.json().catch(() => null);
           if (data?.needsCalendar) { sendResponse({ ok: false, needsCalendar: true }); break; }
