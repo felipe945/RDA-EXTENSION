@@ -3,13 +3,23 @@
 import { type NextRequest } from "next/server";
 import { verifyRepToken } from "@/lib/extension-token";
 import { supabaseServer } from "@/lib/supabase";
-import { getBaseUrl } from "@/lib/base-url";
 import {
   getGoogleIntegration,
   hasCalendarScope,
   DEFAULT_TIMEZONE,
   DEFAULT_SLOT_MINS,
 } from "@/lib/google-calendar";
+
+// The extension caches this dashboardUrl and routes ALL its calls to it, so it
+// must be the stable alias — never getBaseUrl(), which resolves to Vercel's
+// immutable per-deployment URL (frozen at old code / garbage-collected on the
+// next deploy). Echo back the host the extension actually called.
+function requestOrigin(req: NextRequest): string {
+  const proto = req.headers.get("x-forwarded-proto") ?? "https";
+  const host =
+    req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? req.nextUrl.host;
+  return `${proto}://${host}`;
+}
 
 export async function GET(req: NextRequest) {
   const rep = await verifyRepToken(req.headers.get("authorization"));
@@ -25,7 +35,7 @@ export async function GET(req: NextRequest) {
 
   return Response.json({
     ok: true,
-    dashboardUrl: getBaseUrl(),
+    dashboardUrl: requestOrigin(req),
     fanbasisHandle: "fanbasis",
     rep: {
       id: rep.rep_id,
