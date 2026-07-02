@@ -4,10 +4,17 @@ import { useState, useCallback, useEffect } from "react";
 import { useLeads } from "@/hooks/useLeads";
 import { useMode } from "@/components/ModeProvider";
 import type { Lead } from "@/hooks/useLeads";
-import { IgHandle, igDmUrl, igProfileUrl, isSnoozed, type LeadPlus } from "@/components/ig";
+import { IgHandle, igDmUrl, igProfileUrl, type LeadPlus } from "@/components/ig";
 import { SnoozeControl } from "@/components/SnoozeControl";
+import { TouchChips } from "@/components/TouchChips";
+import BookCallModal from "@/components/BookCallModal";
+import { buildQueue, computeBatchProgress, type QueueChannel } from "@/lib/queue";
+import { scriptsForStage } from "@/lib/scripts";
+import { stageColor } from "@/lib/stage-colors";
 
-type Channel = "ig" | "email" | "linkedin";
+type Channel = QueueChannel;
+
+const SALES_STAGES = ["New", "Warming", "DM Sent", "Replied", "Qualifying", "Call Offered", "Booked", "Closed", "DQ", "Blocked"];
 
 const CHANNEL_LABELS: Record<Channel, string> = { ig: "Instagram", email: "Email", linkedin: "LinkedIn" };
 
@@ -37,8 +44,6 @@ function formatFollowers(n: number | null) {
   return String(n);
 }
 
-const SKIP_STAGES = ["DM Sent", "Replied", "Qualifying", "Call Offered", "Booked", "Closed", "DQ", "Blocked"];
-
 export default function OutreachPage() {
   const { mode } = useMode();
   const { leads: allLeadsRaw, refresh } = useLeads(mode);
@@ -47,23 +52,20 @@ export default function OutreachPage() {
   const [doneCount, setDoneCount] = useState(0);
   const [copied, setCopied] = useState(false);
   const [note, setNote] = useState("");
-  const [saving, setSaving] = useState<false | "sent" | "dq" | "blocked">(false);
+  const [saving, setSaving] = useState<false | "sent" | "dq" | "blocked" | "stage" | "due">(false);
   const [pendingUndo, setPendingUndo] = useState<{
     lead: Lead; opener: string; note: string; timer: ReturnType<typeof setTimeout>;
   } | null>(null);
+  const [showBookCall, setShowBookCall] = useState(false);
+  const [recentMsgs, setRecentMsgs] = useState<
+    { id: string; channel: string; direction: string; body: string | null; created_at: string }[]
+  >([]);
 
-  // Snoozed leads sit out of the queue until snoozed_until passes (C4 —
-  // server-persisted, shared with the extension).
-  const allLeads = (allLeadsRaw as LeadPlus[]).filter(
-    (l) => !SKIP_STAGES.includes(l.stage) && !isSnoozed(l),
-  );
-
-  const queued = allLeads.filter((l) => {
-    if (channel === "ig") return l.source === "IG" || !!l.ig_username;
-    if (channel === "email") return !!l.email;
-    if (channel === "linkedin") return !!l.linkedin_url;
-    return true;
-  });
+  // Queue + progress math come from lib/queue (FBQueue parity, G2/G9):
+  // open = not-done + not-snoozed + has-channel, sorted by displayed fit score.
+  const allLeads = allLeadsRaw as LeadPlus[];
+  const queued = buildQueue(allLeads, channel);
+  const progress = computeBatchProgress(allLeads, channel);
 
   const lead = queued[idx] ?? null;
   const opener = lead ? getOpener(lead, channel) : "";
@@ -175,6 +177,55 @@ export default function OutreachPage() {
     return () => { if (pendingUndo) clearTimeout(pendingUndo.timer); };
   }, [pendingUndo]);
 
+  // Last-4 message history for the current card (G6) — same context the
+  // extension's "Recent Chats" gives before writing a DM.
+  const leadId = lead?.id ?? null;
+  useEffect(() => {
+    setRecentMsgs([]);
+    if (!leadId) return;
+    let cancelled = false;
+    fetch(`/api/messages?lead_id=${leadId}&limit=4`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { messages?: typeof recentMsgs } | null) => {
+        if (!cancelled && data?.messages) setRecentMsgs(data.messages);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leadId]);
+
+  // Full stage control (G3) — any of the 10 sales stages without leaving the
+  // queue. Moving to a done-stage drops the card on the next refresh.
+  async function setStageTo(stage: string) {
+    if (!lead || saving) return;
+    setSaving("stage");
+    await fetch("/api/leads", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: lead.id, stage, updated_at: new Date().toISOString() }),
+    });
+    setSaving(false);
+    await refresh();
+    setIdx((i) => Math.min(i, Math.max(0, queued.length - 2)));
+  }
+
+  // Push the follow-up date without leaving the queue (G7).
+  async function bumpDueDate(days: number) {
+    if (!lead || saving) return;
+    setSaving("due");
+    await fetch("/api/leads", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: lead.id,
+        due_at: new Date(Date.now() + days * 86400000).toISOString(),
+        updated_at: new Date().toISOString(),
+      }),
+    });
+    setSaving(false);
+    await refresh();
+  }
+
   async function markStage(stage: "DQ" | "Blocked") {
     if (!lead || saving) return;
     setSaving(stage === "DQ" ? "dq" : "blocked");
@@ -199,6 +250,12 @@ export default function OutreachPage() {
     setCopied(false);
   }
 
+  function prev() {
+    setIdx((i) => (i - 1 + Math.max(queued.length, 1)) % Math.max(queued.length, 1));
+    setNote("");
+    setCopied(false);
+  }
+
   const cache = (lead?.research_cache ?? {}) as Record<string, unknown>;
   const fitScore = typeof cache.fitScore === "number" ? cache.fitScore : null;
   const stack = Array.isArray(cache.stackDetected) ? (cache.stackDetected as string[]) : [];
@@ -218,12 +275,7 @@ export default function OutreachPage() {
         {/* Channel tabs */}
         <div className="flex gap-1 bg-gray-900 rounded-lg p-1">
           {(["ig", "email", "linkedin"] as Channel[]).map((c) => {
-            const count = allLeads.filter((l) => {
-              if (c === "ig") return l.source === "IG" || !!l.ig_username;
-              if (c === "email") return !!l.email;
-              if (c === "linkedin") return !!l.linkedin_url;
-              return false;
-            }).length;
+            const count = buildQueue(allLeads, c).length;
             return (
               <button
                 key={c}
@@ -239,17 +291,18 @@ export default function OutreachPage() {
         </div>
       </div>
 
-      {/* Progress bar */}
-      {queued.length > 0 && (
+      {/* Batch progress — reached-out share from server stage data (G2), so it
+          survives reloads and matches the extension's number exactly. */}
+      {progress.total > 0 && (
         <div className="mb-6">
           <div className="flex justify-between text-xs text-gray-500 mb-1.5">
-            <span>{idx + 1} of {queued.length}</span>
-            <span>{Math.round((doneCount / Math.max(queued.length + doneCount, 1)) * 100)}% done</span>
+            <span>{queued.length > 0 ? `Card ${idx + 1} of ${queued.length}` : "Queue empty"}</span>
+            <span>Reached out: {progress.contacted} / {progress.total} · {progress.pct}%</span>
           </div>
           <div className="bg-gray-800 rounded-full h-1">
             <div
               className="bg-[#FF3A69] h-1 rounded-full transition-all"
-              style={{ width: `${(doneCount / Math.max(queued.length + doneCount, 1)) * 100}%` }}
+              style={{ width: `${progress.pct}%` }}
             />
           </div>
         </div>
@@ -311,6 +364,23 @@ export default function OutreachPage() {
               </div>
             )}
 
+            {/* Full stage control (G3) + two-touch chips (G5) — same as the
+                extension card, so stage moves never require leaving the queue */}
+            <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+              <select
+                value={lead.stage}
+                onChange={(e) => setStageTo(e.target.value)}
+                disabled={!!saving}
+                className="bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs font-semibold outline-none focus:border-gray-500 disabled:opacity-50"
+                style={{ color: stageColor(lead.stage) }}
+              >
+                {SALES_STAGES.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              {channel === "ig" && <TouchChips lead={lead} />}
+            </div>
+
             {stack.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mb-3">
                 {stack.map((s) => (
@@ -329,6 +399,24 @@ export default function OutreachPage() {
               <div className="flex items-center gap-2 text-xs text-gray-500 mb-3 border-t border-gray-800 pt-3">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#FF3A69] animate-pulse inline-block" />
                 Research in progress — opener will appear shortly
+              </div>
+            )}
+
+            {/* Last-4 message history (G6) — context before writing, no detour to Inbox */}
+            {recentMsgs.length > 0 && (
+              <div className="border-t border-gray-800 pt-3 space-y-1.5">
+                <p className="text-[10px] text-gray-600 uppercase tracking-wide">Recent messages</p>
+                {recentMsgs.map((m) => (
+                  <div key={m.id} className="flex items-start gap-2 text-xs">
+                    <span className={m.direction === "inbound" ? "text-[#14B8A6]" : "text-gray-600"} title={m.direction}>
+                      {m.direction === "inbound" ? "←" : "→"}
+                    </span>
+                    <p className="text-gray-400 leading-snug flex-1 line-clamp-2">{m.body ?? "(no text)"}</p>
+                    <span className="text-gray-600 shrink-0">
+                      {new Date(m.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -368,6 +456,9 @@ export default function OutreachPage() {
               )}
             </div>
           )}
+
+          {/* Stage-aware script picker (G4) — the extension's carousel, in the flow */}
+          <StageScripts stage={lead.stage} channel={channel} leadName={lead.name ?? null} />
 
           <textarea
             value={note}
@@ -418,21 +509,49 @@ export default function OutreachPage() {
             )}
           </div>
 
-          {/* Secondary actions */}
+          {/* Follow-up date (G7) + real call booking (G1) */}
+          <div className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-900 px-3 py-2">
+            <span className="inline-flex items-center gap-1.5 flex-wrap">
+              <span className="text-xs text-gray-500">Follow-up:</span>
+              {[1, 3, 7].map((d) => (
+                <button
+                  key={d}
+                  disabled={!!saving}
+                  onClick={() => bumpDueDate(d)}
+                  className="rounded border border-gray-700 px-2 py-0.5 text-xs text-gray-500 transition-colors hover:border-gray-500 hover:text-gray-300 disabled:opacity-50"
+                >
+                  +{d}d
+                </button>
+              ))}
+              {lead.due_at && (
+                <span className="text-xs text-gray-600">
+                  due {new Date(lead.due_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                </span>
+              )}
+            </span>
+            <button
+              onClick={() => setShowBookCall(true)}
+              className="rounded-lg px-3 py-1 text-xs font-semibold text-white transition-all"
+              style={{ background: "linear-gradient(135deg, #FF3A69, #c0294d)" }}
+            >
+              📞 Book Call
+            </button>
+          </div>
+
+          {/* Secondary actions — Blocked lives in the stage dropdown now */}
           <div className="flex gap-2">
+            <button
+              onClick={prev}
+              className="flex-1 px-3 py-2 bg-gray-900 hover:bg-gray-800 border border-gray-800 text-gray-500 hover:text-gray-300 rounded-lg transition-colors text-xs font-medium"
+            >
+              ‹ Prev
+            </button>
             <button
               onClick={() => markStage("DQ")}
               disabled={!!saving}
               className="flex-1 px-3 py-2 bg-gray-900 hover:bg-red-950 border border-gray-800 hover:border-red-900 text-gray-500 hover:text-red-400 rounded-lg transition-colors text-xs font-medium disabled:opacity-50"
             >
               {saving === "dq" ? "Saving..." : "DQ"}
-            </button>
-            <button
-              onClick={() => markStage("Blocked")}
-              disabled={!!saving}
-              className="flex-1 px-3 py-2 bg-gray-900 hover:bg-orange-950 border border-gray-800 hover:border-orange-900 text-gray-500 hover:text-orange-400 rounded-lg transition-colors text-xs font-medium disabled:opacity-50"
-            >
-              {saving === "blocked" ? "Saving..." : "Blocked"}
             </button>
             <button
               onClick={skip}
@@ -447,8 +566,81 @@ export default function OutreachPage() {
               Profile
             </a>
           </div>
+
+          {showBookCall && (
+            <BookCallModal
+              lead={lead}
+              onClose={() => setShowBookCall(false)}
+              onBooked={() => { refresh(); }}
+            />
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+// Compact port of the extension's stage-filtered script carousel
+// (instagram.js renderScriptsCarousel): variants for the lead's CURRENT stage,
+// right where the DM is written. [name]-style placeholders are filled with the
+// lead's first name; bracketed blanks we can't know stay visible on purpose.
+function StageScripts({ stage, channel, leadName }: { stage: string; channel: Channel; leadName: string | null }) {
+  const scripts = scriptsForStage(stage).filter((s) =>
+    channel === "email" ? s.category === "email" : s.category !== "email",
+  );
+  const [i, setI] = useState(0);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => { setI(0); setCopied(false); }, [stage, channel, leadName]);
+
+  if (scripts.length === 0) return null;
+  const idx = Math.min(i, scripts.length - 1);
+  const script = scripts[idx];
+
+  const firstName = leadName?.trim().split(/\s+/)[0] || null;
+  const fill = (t: string) => (firstName ? t.replace(/\[(first\s*)?name\]/gi, firstName) : t);
+  const text = fill(script.text);
+
+  function copy() {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-gray-500 uppercase tracking-wide">Scripts · {stage}</p>
+        <div className="flex items-center gap-2 text-xs text-gray-600">
+          <button
+            onClick={() => { setI((idx - 1 + scripts.length) % scripts.length); setCopied(false); }}
+            className="px-1.5 rounded border border-gray-800 hover:border-gray-600 hover:text-gray-300 transition-colors"
+            aria-label="Previous script"
+          >
+            ‹
+          </button>
+          <span>{idx + 1}/{scripts.length}</span>
+          <button
+            onClick={() => { setI((idx + 1) % scripts.length); setCopied(false); }}
+            className="px-1.5 rounded border border-gray-800 hover:border-gray-600 hover:text-gray-300 transition-colors"
+            aria-label="Next script"
+          >
+            ›
+          </button>
+        </div>
+      </div>
+      <p className="text-xs font-semibold text-gray-400">{script.label}</p>
+      {script.subject && (
+        <p className="text-xs text-gray-500">Subject: {fill(script.subject)}</p>
+      )}
+      <p className="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap max-h-36 overflow-y-auto">{text}</p>
+      <button
+        onClick={copy}
+        className="w-full text-xs py-1.5 border border-gray-700 rounded-lg text-gray-400 hover:text-white hover:border-[#FF3A69] transition-colors"
+      >
+        {copied ? "✓ Copied!" : "Copy script"}
+      </button>
     </div>
   );
 }

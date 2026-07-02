@@ -1,46 +1,95 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { ChevronLeft, ChevronRight, X, Check, Calendar, Clock } from "lucide-react";
 import type { Lead } from "@/hooks/useLeads";
 
-// ── Time slots available for booking ──────────────────────────────────────────
-const TIME_SLOTS = [
-  "9:00 AM", "9:30 AM", "10:00 AM", "10:30 AM",
-  "11:00 AM", "11:30 AM", "12:00 PM", "12:30 PM",
-  "1:00 PM",  "1:30 PM",  "2:00 PM",  "2:30 PM",
-  "3:00 PM",  "3:30 PM",  "4:00 PM",  "4:30 PM",
-  "5:00 PM",
-];
+// Real booking (PARITY G1) — mirrors the extension's flow: open slots come
+// from Google freeBusy via /api/calendar/slots, the event + guest invite is
+// created by /api/calendar/book, which also stages the lead to Booked
+// server-side (scope-checked) and deliberately leaves due_at alone.
 
-const DAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-
+type Slot = { start: string; end: string };
 type Step = "date" | "time" | "confirm";
+type LoadState = "loading" | "ready" | "needsCalendar" | "error";
+
+const SLOT_MINS = 30;
+const DAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+const DAYS_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function dateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function fmtTime(iso: string): string {
+  const d = new Date(iso);
+  const h = d.getHours(), m = d.getMinutes();
+  const h12 = h % 12 || 12;
+  const ampm = h >= 12 ? "PM" : "AM";
+  return `${h12}${m === 0 ? "" : `:${String(m).padStart(2, "0")}`} ${ampm}`;
+}
 
 interface Props {
   lead: Lead;
   onClose: () => void;
-  onBooked?: (date: Date, time: string) => void;
+  onBooked?: () => void;
 }
 
 export default function BookCallModal({ lead, onClose, onBooked }: Props) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
+  const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [slots, setSlots] = useState<Slot[]>([]);
   const [step, setStep] = useState<Step>("date");
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
-  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
-  const [selectedTime, setSelectedTime] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
+  const [guestEmail, setGuestEmail] = useState(lead.email ?? "");
   const [saving, setSaving] = useState(false);
-  const [done, setDone] = useState(false);
+  const [bookError, setBookError] = useState<string | null>(null);
+  const [done, setDone] = useState<{ htmlLink?: string; leadError?: string } | null>(null);
+  const [dmCopied, setDmCopied] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/calendar/slots?days=14&slotMins=${SLOT_MINS}`);
+        const data = (await res.json().catch(() => null)) as
+          | { ok: boolean; slots?: Slot[]; needsCalendar?: boolean }
+          | null;
+        if (cancelled) return;
+        if (data?.ok && data.slots) {
+          setSlots(data.slots);
+          setLoadState("ready");
+        } else if (data?.needsCalendar) {
+          setLoadState("needsCalendar");
+        } else {
+          setLoadState("error");
+        }
+      } catch {
+        if (!cancelled) setLoadState("error");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const slotsByDate = useMemo(() => {
+    const map: Record<string, Slot[]> = {};
+    for (const s of slots) {
+      const key = dateKey(new Date(s.start));
+      (map[key] ??= []).push(s);
+    }
+    return map;
+  }, [slots]);
 
   // ── Calendar helpers ─────────────────────────────────────────────────────
   const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
   const firstDayOfWeek = new Date(viewYear, viewMonth, 1).getDay();
-  const maxDate = new Date(today);
-  maxDate.setDate(maxDate.getDate() + 60);
 
   function prevMonth() {
     if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); }
@@ -51,62 +100,68 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
     else setViewMonth(m => m + 1);
   }
 
-  function isDisabled(day: number) {
-    const d = new Date(viewYear, viewMonth, day);
-    return d < today || d > maxDate;
+  function keyFor(day: number) {
+    return dateKey(new Date(viewYear, viewMonth, day));
   }
-  function isSelected(day: number) {
-    return selectedDate?.getFullYear() === viewYear &&
-           selectedDate?.getMonth() === viewMonth &&
-           selectedDate?.getDate() === day;
+  function hasSlots(day: number) {
+    return (slotsByDate[keyFor(day)]?.length ?? 0) > 0;
   }
   function isToday(day: number) {
     return today.getFullYear() === viewYear && today.getMonth() === viewMonth && today.getDate() === day;
   }
 
   function selectDate(day: number) {
-    if (isDisabled(day)) return;
-    setSelectedDate(new Date(viewYear, viewMonth, day));
+    if (!hasSlots(day)) return;
+    setSelectedKey(keyFor(day));
     setStep("time");
   }
 
   // ── Confirm booking ──────────────────────────────────────────────────────
   const confirm = useCallback(async () => {
-    if (!selectedDate || !selectedTime) return;
+    if (!selectedSlot || saving) return;
     setSaving(true);
+    setBookError(null);
     try {
-      // Build ISO datetime from selected date + time string
-      const [timePart, period] = selectedTime.split(" ");
-      let [hours, minutes] = timePart.split(":").map(Number);
-      if (period === "PM" && hours !== 12) hours += 12;
-      if (period === "AM" && hours === 12) hours = 0;
-      const dt = new Date(selectedDate);
-      dt.setHours(hours, minutes, 0, 0);
-
-      await fetch(`/api/leads`, {
-        method: "PATCH",
+      const res = await fetch("/api/calendar/book", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          id: lead.id,
-          stage: "Booked",
-          due_at: dt.toISOString(),
+          slotStart: selectedSlot.start,
+          slotEnd: selectedSlot.end,
+          leadName: lead.name ?? lead.ig_username ?? "Lead",
+          guestEmail: guestEmail.trim() || undefined,
+          leadId: lead.id,
         }),
       });
-
-      setDone(true);
-      onBooked?.(dt, selectedTime);
-      setTimeout(onClose, 1800);
+      const data = (await res.json().catch(() => null)) as
+        | { ok: boolean; htmlLink?: string; leadError?: string; needsCalendar?: boolean; error?: string }
+        | null;
+      if (data?.ok) {
+        setDone({ htmlLink: data.htmlLink, leadError: data.leadError });
+        onBooked?.();
+      } else if (data?.needsCalendar) {
+        setLoadState("needsCalendar");
+      } else {
+        setBookError(data?.error === "forbidden" ? "This lead belongs to a teammate." : "Booking failed — try again.");
+      }
+    } catch {
+      setBookError("Booking failed — network error.");
     } finally {
       setSaving(false);
     }
-  }, [selectedDate, selectedTime, lead.id, onBooked, onClose]);
+  }, [selectedSlot, saving, guestEmail, lead, onBooked]);
 
   // ── Formatted display ────────────────────────────────────────────────────
+  const selectedDate = selectedKey ? new Date(`${selectedKey}T00:00:00`) : null;
   const formattedDate = selectedDate
-    ? selectedDate.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })
+    ? `${DAYS_LONG[selectedDate.getDay()]}, ${MONTHS[selectedDate.getMonth()]} ${selectedDate.getDate()}`
     : "";
 
   const name = lead.ig_username ? `@${lead.ig_username}` : (lead.name ?? "Lead");
+
+  const dmText = selectedSlot && selectedDate
+    ? `Hey! Just sent a calendar invite for ${DAYS_LONG[selectedDate.getDay()]} ${MONTHS_SHORT[selectedDate.getMonth()]} ${selectedDate.getDate()} at ${fmtTime(selectedSlot.start)} — ${SLOT_MINS} min, no pressure. Let me know if that time works!`
+    : "";
 
   return (
     <div
@@ -122,7 +177,7 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: "1px solid #1A2235" }}>
           <div>
             <div className="text-sm font-semibold" style={{ color: "#E2E8F0" }}>Book a Call</div>
-            <div className="text-xs mt-0.5" style={{ color: "#475569" }}>{name}</div>
+            <div className="text-xs mt-0.5" style={{ color: "#475569" }}>{SLOT_MINS} min · {name}</div>
           </div>
           <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
             style={{ background: "#1A2235", color: "#475569" }}
@@ -133,18 +188,46 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
         </div>
 
         {/* Step indicator */}
-        <div className="flex px-5 pt-4 gap-1.5">
-          {(["date", "time", "confirm"] as Step[]).map((s, i) => (
-            <div key={s} className="h-0.5 flex-1 rounded-full transition-all duration-300"
-              style={{ background: step === s || (s === "date" && step !== "date") || (s === "time" && step === "confirm")
-                ? "#FF3A69" : "#1A2235" }} />
-          ))}
-        </div>
+        {loadState === "ready" && !done && (
+          <div className="flex px-5 pt-4 gap-1.5">
+            {(["date", "time", "confirm"] as Step[]).map((s) => (
+              <div key={s} className="h-0.5 flex-1 rounded-full transition-all duration-300"
+                style={{ background: step === s || (s === "date" && step !== "date") || (s === "time" && step === "confirm")
+                  ? "#FF3A69" : "#1A2235" }} />
+            ))}
+          </div>
+        )}
 
         <div className="p-5">
 
-          {/* ── STEP 1: Date picker ── */}
-          {step === "date" && (
+          {/* ── Loading / calendar-not-connected / error ── */}
+          {loadState === "loading" && (
+            <div className="py-10 text-center">
+              <span className="inline-block w-2 h-2 rounded-full animate-pulse" style={{ background: "#FF3A69" }} />
+              <p className="text-xs mt-3" style={{ color: "#475569" }}>Checking your Google Calendar…</p>
+            </div>
+          )}
+
+          {loadState === "needsCalendar" && (
+            <div className="py-8 text-center space-y-3">
+              <Calendar size={22} style={{ color: "#475569", margin: "0 auto" }} />
+              <p className="text-sm font-semibold" style={{ color: "#E2E8F0" }}>Calendar not connected</p>
+              <p className="text-xs leading-relaxed" style={{ color: "#475569" }}>
+                Your Google sign-in doesn&apos;t include calendar access yet. Sign out and back in
+                with Google to grant it — booking works right after.
+              </p>
+            </div>
+          )}
+
+          {loadState === "error" && (
+            <div className="py-8 text-center space-y-3">
+              <p className="text-sm font-semibold" style={{ color: "#E2E8F0" }}>Couldn&apos;t load availability</p>
+              <p className="text-xs" style={{ color: "#475569" }}>Google Calendar didn&apos;t respond. Close and try again.</p>
+            </div>
+          )}
+
+          {/* ── STEP 1: Date picker (only days with real open slots) ── */}
+          {loadState === "ready" && !done && step === "date" && (
             <div>
               <div className="flex items-center justify-between mb-4">
                 <button onClick={prevMonth} className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
@@ -174,28 +257,28 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
               <div className="grid grid-cols-7 gap-y-1">
                 {Array.from({ length: firstDayOfWeek }).map((_, i) => <div key={`e-${i}`} />)}
                 {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(day => {
-                  const disabled = isDisabled(day);
-                  const selected = isSelected(day);
+                  const available = hasSlots(day);
                   const tod = isToday(day);
                   return (
                     <button
                       key={day}
                       onClick={() => selectDate(day)}
-                      disabled={disabled}
-                      className="mx-auto flex items-center justify-center w-8 h-8 rounded-full text-xs font-medium transition-all"
+                      disabled={!available}
+                      className="relative mx-auto flex items-center justify-center w-8 h-8 rounded-full text-xs font-medium transition-all"
                       style={
-                        selected
-                          ? { background: "#FF3A69", color: "white", fontWeight: 700 }
-                          : disabled
+                        !available
                           ? { color: "#2D3A52", cursor: "not-allowed" }
                           : tod
                           ? { color: "#FF3A69", background: "rgba(255,58,105,0.08)" }
                           : { color: "#94A3B8" }
                       }
-                      onMouseEnter={e => { if (!disabled && !selected) (e.currentTarget).style.background = "#1A2235"; }}
-                      onMouseLeave={e => { if (!disabled && !selected && !tod) (e.currentTarget).style.background = "transparent"; else if (tod && !selected) (e.currentTarget).style.background = "rgba(255,58,105,0.08)"; }}
+                      onMouseEnter={e => { if (available) (e.currentTarget).style.background = "#1A2235"; }}
+                      onMouseLeave={e => { if (available && !tod) (e.currentTarget).style.background = "transparent"; else if (tod) (e.currentTarget).style.background = "rgba(255,58,105,0.08)"; }}
                     >
                       {day}
+                      {available && (
+                        <span className="absolute left-1/2 -translate-x-1/2" style={{ bottom: 1, width: 4, height: 4, borderRadius: "50%", background: "#FF3A69" }} />
+                      )}
                     </button>
                   );
                 })}
@@ -203,8 +286,8 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
             </div>
           )}
 
-          {/* ── STEP 2: Time slots ── */}
-          {step === "time" && (
+          {/* ── STEP 2: Real open slots for the picked day ── */}
+          {loadState === "ready" && !done && step === "time" && selectedKey && (
             <div>
               <button onClick={() => setStep("date")} className="flex items-center gap-1.5 text-xs mb-4 transition-colors"
                 style={{ color: "#475569" }}
@@ -219,20 +302,20 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
               </div>
 
               <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-1">
-                {TIME_SLOTS.map(slot => (
+                {(slotsByDate[selectedKey] ?? []).map(slot => (
                   <button
-                    key={slot}
-                    onClick={() => { setSelectedTime(slot); setStep("confirm"); }}
+                    key={slot.start}
+                    onClick={() => { setSelectedSlot(slot); setStep("confirm"); }}
                     className="py-2.5 rounded-xl text-xs font-semibold transition-all"
                     style={
-                      selectedTime === slot
+                      selectedSlot?.start === slot.start
                         ? { background: "#FF3A69", color: "white", border: "1px solid #FF3A69" }
                         : { background: "#151B2E", color: "#94A3B8", border: "1px solid #1A2235" }
                     }
-                    onMouseEnter={e => { if (selectedTime !== slot) { (e.currentTarget).style.borderColor = "#2A3554"; (e.currentTarget).style.color = "#E2E8F0"; } }}
-                    onMouseLeave={e => { if (selectedTime !== slot) { (e.currentTarget).style.borderColor = "#1A2235"; (e.currentTarget).style.color = "#94A3B8"; } }}
+                    onMouseEnter={e => { if (selectedSlot?.start !== slot.start) { (e.currentTarget).style.borderColor = "#2A3554"; (e.currentTarget).style.color = "#E2E8F0"; } }}
+                    onMouseLeave={e => { if (selectedSlot?.start !== slot.start) { (e.currentTarget).style.borderColor = "#1A2235"; (e.currentTarget).style.color = "#94A3B8"; } }}
                   >
-                    {slot}
+                    {fmtTime(slot.start)}
                   </button>
                 ))}
               </div>
@@ -240,7 +323,7 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
           )}
 
           {/* ── STEP 3: Confirm ── */}
-          {step === "confirm" && !done && (
+          {loadState === "ready" && !done && step === "confirm" && selectedSlot && (
             <div>
               <button onClick={() => setStep("time")} className="flex items-center gap-1.5 text-xs mb-5 transition-colors"
                 style={{ color: "#475569" }}
@@ -250,14 +333,14 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
               </button>
 
               {/* Summary card */}
-              <div className="rounded-xl p-4 mb-5 space-y-2" style={{ background: "#151B2E", border: "1px solid #1E2640" }}>
+              <div className="rounded-xl p-4 mb-4 space-y-2" style={{ background: "#151B2E", border: "1px solid #1E2640" }}>
                 <div className="flex items-center gap-2">
                   <Calendar size={13} style={{ color: "#FF3A69" }} />
                   <span className="text-sm font-semibold" style={{ color: "#E2E8F0" }}>{formattedDate}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Clock size={13} style={{ color: "#3B82F6" }} />
-                  <span className="text-sm font-semibold" style={{ color: "#E2E8F0" }}>{selectedTime}</span>
+                  <span className="text-sm font-semibold" style={{ color: "#E2E8F0" }}>{fmtTime(selectedSlot.start)} · {SLOT_MINS} min</span>
                 </div>
                 <div className="pt-1" style={{ borderTop: "1px solid #1A2235" }}>
                   <span className="text-xs" style={{ color: "#475569" }}>with </span>
@@ -265,9 +348,25 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
                 </div>
               </div>
 
+              <input
+                type="email"
+                value={guestEmail}
+                onChange={(e) => setGuestEmail(e.target.value)}
+                placeholder="Their email (optional — adds them as attendee)"
+                className="w-full rounded-lg px-3 py-2 text-xs outline-none mb-4 transition-colors"
+                style={{ background: "#151B2E", border: "1px solid #2A3554", color: "#CBD5E1" }}
+                onFocus={e => { e.currentTarget.style.borderColor = "#3B82F6"; }}
+                onBlur={e => { e.currentTarget.style.borderColor = "#2A3554"; }}
+              />
+
               <p className="text-xs mb-4" style={{ color: "#475569" }}>
-                This will move the lead to <span style={{ color: "#22C55E", fontWeight: 600 }}>Booked</span> and set the follow-up date.
+                Creates a Google Calendar event and moves the lead to{" "}
+                <span style={{ color: "#22C55E", fontWeight: 600 }}>Booked</span>. Your follow-up date stays as-is.
               </p>
+
+              {bookError && (
+                <p className="text-xs mb-3" style={{ color: "#f87171" }}>{bookError}</p>
+              )}
 
               <button
                 onClick={confirm}
@@ -288,7 +387,34 @@ export default function BookCallModal({ lead, onClose, onBooked }: Props) {
                 <Check size={22} style={{ color: "#22C55E" }} />
               </div>
               <p className="text-sm font-semibold" style={{ color: "#E2E8F0" }}>Call booked!</p>
-              <p className="text-xs text-center" style={{ color: "#475569" }}>{formattedDate} at {selectedTime}</p>
+              <p className="text-xs text-center" style={{ color: "#475569" }}>{formattedDate} at {selectedSlot ? fmtTime(selectedSlot.start) : ""}</p>
+              {done.leadError && (
+                <p className="text-xs text-center" style={{ color: "#fbbf24" }}>
+                  Event created, but the stage didn&apos;t update: {done.leadError}
+                </p>
+              )}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(dmText).then(() => {
+                      setDmCopied(true);
+                      setTimeout(() => setDmCopied(false), 2000);
+                    });
+                  }}
+                  className="px-4 py-2 rounded-lg text-xs transition-all"
+                  style={{ background: "#1A2235", border: dmCopied ? "1px solid #166534" : "1px solid #2A3554", color: dmCopied ? "#4ade80" : "#94A3B8" }}
+                >
+                  {dmCopied ? "✓ Copied!" : "Copy DM text"}
+                </button>
+                {done.htmlLink && (
+                  <a href={done.htmlLink} target="_blank" rel="noreferrer"
+                    className="px-4 py-2 rounded-lg text-xs"
+                    style={{ background: "#1A2235", border: "1px solid #2A3554", color: "#94A3B8" }}>
+                    View event ↗
+                  </a>
+                )}
+              </div>
+              <button onClick={onClose} className="text-xs mt-1" style={{ color: "#475569" }}>Close</button>
             </div>
           )}
 
