@@ -14,6 +14,88 @@
     return /\/direct_v2\/threads\/broadcast\//.test(url);
   }
 
+  // Contract R1: ig_reply — inbound DM detection off inbox/thread READS.
+  // broadcast is the send endpoint (Contract A) and must never be treated as a read.
+  function isDmReadUrl(url) {
+    if (!url || isDmSendUrl(url)) return false;
+    return /\/direct_v2\/inbox\//.test(url) || /\/direct_v2\/threads\/\d+\//.test(url);
+  }
+
+  // Allowlist of item_types that count as a real inbound message. Reactions,
+  // likes, seen markers, and action_log entries land in items[] with the
+  // prospect's user_id — blocklisting would let unknown types flip leads to
+  // Replied, so anything not listed here is dropped.
+  const REAL_MESSAGE_TYPES = new Set([
+    "text", "media", "clip", "voice_media", "raven_media",
+    "animated_media", "link", "share", "story_share",
+  ]);
+
+  function dmItemText(item) {
+    if (typeof item.text === "string" && item.text) return item.text;
+    if (item.item_type === "voice_media") return "[voice]";
+    if (item.item_type === "link") return (item.link && item.link.text) || "[link]";
+    return "[media]";
+  }
+
+  function handleDmResponse(data) {
+    try {
+      if (!data) return;
+      const threads = Array.isArray(data.inbox?.threads)
+        ? data.inbox.threads
+        : data.thread ? [data.thread] : [];
+      if (!threads.length) return;
+
+      // Viewer id from the response itself; per-thread viewer_id wins.
+      const topViewerId =
+        data.viewer?.pk ?? data.viewer?.pk_id ?? data.viewer?.id ??
+        data.inbox?.viewer?.pk ?? data.viewer_id ?? null;
+
+      for (const thread of threads) {
+        if (!thread) continue;
+        const viewerId = thread.viewer_id ?? topViewerId;
+        // Shared-account landmine: with viewerId undefined, user_id !== viewerId
+        // is always true and reps' own outbound DMs would emit as replies.
+        if (viewerId == null) continue;
+        const vid = String(viewerId);
+
+        const threadId = String(thread.thread_id ?? thread.thread_v2_id ?? "");
+        if (!threadId) continue;
+        const users = Array.isArray(thread.users) ? thread.users : [];
+        const items = Array.isArray(thread.items) ? thread.items : [];
+
+        // Items arrive newest-first; dispatch oldest→newest so a burst of
+        // replies lands in natural order downstream. T2 dedups by itemId.
+        for (let i = items.length - 1; i >= 0; i--) {
+          const item = items[i];
+          if (!item) continue;
+          if (item.user_id == null || String(item.user_id) === vid) continue;
+          if (!REAL_MESSAGE_TYPES.has(item.item_type)) continue;
+          const itemId = item.item_id != null ? String(item.item_id) : "";
+          if (!itemId) continue;
+
+          const sender =
+            users.find((u) => u && String(u.pk ?? u.pk_id ?? u.id) === String(item.user_id)) ||
+            users.find((u) => u && String(u.pk ?? u.pk_id ?? u.id) !== vid);
+          const username = String(sender?.username || "").toLowerCase().replace(/^@/, "");
+          if (!username) continue;
+
+          document.dispatchEvent(
+            new CustomEvent("ig_reply", {
+              detail: {
+                threadId,
+                username,
+                itemId,
+                text: dmItemText(item),
+                itemType: String(item.item_type || ""),
+              },
+              bubbles: true, composed: true,
+            })
+          );
+        }
+      }
+    } catch {}
+  }
+
   window.fetch = function (input, init) {
     const url = typeof input === "string" ? input : (input && input.url) ? input.url : "";
     const method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
@@ -50,6 +132,14 @@
     // After any fetch — try to read viewer from GraphQL/API response first, then fall back to DOM
     const p = origFetch.apply(this, arguments);
     p.then(async (res) => {
+      // DM inbox/thread reads (Contract R1) — runs before and independent of
+      // the viewer block below, whose early return would otherwise skip it.
+      if (method === "GET" && isDmReadUrl(url)) {
+        try {
+          const dmData = await res.clone().json().catch(() => null);
+          if (dmData) handleDmResponse(dmData);
+        } catch {}
+      }
       try {
         if (url.includes("graphql") || url.includes("api/v1")) {
           const clone = res.clone();
@@ -80,6 +170,13 @@
   const origSend = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.send = function (...args) {
     this.addEventListener("load", function () {
+      // DM inbox/thread reads (Contract R1) — /direct_v2/ is not in the
+      // viewer allowlist below, so it needs its own branch.
+      try {
+        if (this._method === "GET" && isDmReadUrl(this._url)) {
+          handleDmResponse(JSON.parse(this.responseText));
+        }
+      } catch {}
       try {
         if (
           this._url &&
