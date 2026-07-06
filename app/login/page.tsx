@@ -14,8 +14,8 @@ type InvitePreview = {
 
 function FBMark() {
   return (
-    <div className="mx-auto mb-4 flex h-9 w-9 items-center justify-center" aria-hidden="true">
-      <Logo size={36} />
+    <div className="mx-auto mb-4 flex justify-center" aria-hidden="true">
+      <Logo size={52} />
     </div>
   );
 }

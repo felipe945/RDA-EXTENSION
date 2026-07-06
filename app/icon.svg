@@ -12,10 +12,10 @@
   </defs>
   <rect x="4" y="4" width="192" height="192" rx="42" fill="#17171A"/>
   <g mask="url(#commaCut)">
-    <g clip-path="url(#leftHalf)" fill="#E94866">
+    <g clip-path="url(#leftHalf)" fill="#F1567A">
       <polygon points="100,55 111.76,88.82 147.55,89.55 119.02,111.18 129.4,145.45 100,125 70.6,145.45 80.98,111.18 52.45,89.55 88.24,88.82"/>
     </g>
-    <g clip-path="url(#rightHalf)" fill="#82B2F7">
+    <g clip-path="url(#rightHalf)" fill="#8FBBFB">
       <polygon points="100,55 111.76,88.82 147.55,89.55 119.02,111.18 129.4,145.45 100,125 70.6,145.45 80.98,111.18 52.45,89.55 88.24,88.82"/>
     </g>
   </g>

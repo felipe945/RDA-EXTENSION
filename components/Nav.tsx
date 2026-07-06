@@ -56,10 +56,7 @@ export default function Nav() {
 
       {/* Logo / Brand */}
       <div className="flex items-center gap-2.5 px-4 py-4 border-b" style={{ borderColor: '#1A2235' }}>
-        <Logo size={26} />
-        <span className="font-semibold text-sm tracking-tight" style={{ color: '#E2E8F0' }}>
-          FanMas
-        </span>
+        <Logo size={30} showWordmark />
       </div>
 
       {/* Nav links */}
