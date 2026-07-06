@@ -55,6 +55,11 @@ async function main() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
+  // Stamp new leads with the org, or they're invisible in the org-scoped
+  // dashboard (scopeLeadsQuery filters by org_id; a null org = hidden in the UI).
+  const { data: orgRow } = await supabase.from("orgs").select("id").limit(1).maybeSingle();
+  const orgId = (orgRow?.id as string | undefined) ?? null;
+
   console.log(`\nPlatform: ${platform} | Target: ${target}\n`);
 
   let profiles: SocialProfile[] = [];
@@ -100,6 +105,7 @@ async function main() {
     follower_count:   p.followerCount,
     source:           platform === "instagram" ? "IG" : "Manual",
     mode:             "sales" as const,
+    org_id:           orgId,
     stage:            "New",
     tags:             [platformTag, "coach", platform],
     research_status:  "pending",
