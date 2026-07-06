@@ -3,12 +3,19 @@ import { supabaseServer } from "@/lib/supabase";
 import { scoreLead } from "@/lib/scoring";
 import { applyLeadPatch } from "@/lib/leads-update";
 import { getSupabaseErrorMessage } from "@/lib/supabaseError";
-import { getActor, scopeLeadsQuery, canAccessLead } from "@/lib/scope";
+import { getActor, scopeLeadsQueryFor, canAccessLead, type LeadScope } from "@/lib/scope";
 import { canSeeAllLeads } from "@/lib/permissions";
+import { stageSqlList, TERMINAL_STAGES } from "@/lib/stages";
 
-// GET /api/leads?mode=sales|csm&stage=X&bucket=overdue|today|upcoming|booked|archived
-// C1 — org + role/owner scoped: admin sees all org leads, reps see the shared
-// cold pool (owner_id null) + their own. Admin rows carry owner_name.
+// Supabase caps a single response at a fixed number of rows (default 1000). We
+// fetch in full-size pages via .range() and stop on the first short page, so the
+// response is ALWAYS complete — see the invariant comment in GET.
+const PAGE_SIZE = 1000;
+
+// GET /api/leads?mode=sales|csm&stage=X&bucket=overdue|today|upcoming|booked|archived&scope=mine|team
+// C1 (scoped) — org + role/owner scoped. Reps always see the shared cold pool
+// (owner_id null) + their own. Admin/owner: ?scope=mine → own working queue;
+// ?scope=team or no scope (back-compat) → all org leads (rows carry owner_name).
 export async function GET(request: NextRequest) {
   const actor = await getActor(request);
   if (!actor) return Response.json({ error: "unauthorized" }, { status: 401 });
@@ -22,61 +29,87 @@ export async function GET(request: NextRequest) {
 
   const igUsername = searchParams.get("ig_username");
   const id = searchParams.get("id");
-
-  const isAdmin = canSeeAllLeads(actor.role);
-  let query = db
-    .from("leads")
-    .select((isAdmin ? "*, owner:users!leads_owner_id_fkey(name)" : "*") as string)
-    .order("due_at", { ascending: true });
-  query = scopeLeadsQuery(query, actor);
-
   const searchQuery = searchParams.get("search");
 
-  if (id) {
-    query = query.eq("id", id);
-  } else {
-    if (mode) query = query.eq("mode", mode);
-    if (stage) query = query.eq("stage", stage);
-    if (igUsername) query = query.eq("ig_username", igUsername);
-    if (searchQuery && searchQuery.trim()) {
-      const q = `%${searchQuery.trim().toLowerCase()}%`;
-      query = query.or(`ig_username.ilike.${q},name.ilike.${q},email.ilike.${q},phone.ilike.${q}`);
+  // No scope param → null → today's behavior exactly (back-compat: old
+  // extension builds and other callers). Anything not "mine"/"team" is ignored.
+  const scopeParam = searchParams.get("scope");
+  const scope: LeadScope | null =
+    scopeParam === "mine" || scopeParam === "team" ? scopeParam : null;
+
+  const isAdmin = canSeeAllLeads(actor.role);
+  // Narrowed const so the makeQuery closure keeps actor's non-null type.
+  const scopedActor = actor;
+
+  // Rebuilt fresh per page so we can re-apply .range(). Cold-pool leads have a
+  // null due_at (we DON'T fabricate one — that would flood follow-up views), so
+  // the pool is ordered by created_at desc, not due_at.
+  function makeQuery() {
+    let query = db
+      .from("leads")
+      .select((isAdmin ? "*, owner:users!leads_owner_id_fkey(name)" : "*") as string)
+      // created_at desc, id as a stable tiebreaker so range() paging across
+      // pages can't skip or duplicate rows that share a created_at.
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: true });
+    query = scopeLeadsQueryFor(query, scopedActor, scope);
+
+    if (id) {
+      query = query.eq("id", id);
+    } else {
+      if (mode) query = query.eq("mode", mode);
+      if (stage) query = query.eq("stage", stage);
+      if (igUsername) query = query.eq("ig_username", igUsername);
+      if (searchQuery && searchQuery.trim()) {
+        const q = `%${searchQuery.trim().toLowerCase()}%`;
+        query = query.or(`ig_username.ilike.${q},name.ilike.${q},email.ilike.${q},phone.ilike.${q}`);
+      }
     }
+
+    if (bucket) {
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+      const tomorrowEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7, 23, 59, 59).toISOString();
+
+      switch (bucket) {
+        case "overdue":
+          // Booked + terminal stages don't count as overdue follow-ups.
+          query = query.lt("due_at", todayStart).not("stage", "in", stageSqlList(["Booked", ...TERMINAL_STAGES]));
+          break;
+        case "today":
+          query = query.gte("due_at", todayStart).lte("due_at", todayEnd);
+          break;
+        case "upcoming":
+          query = query.gt("due_at", todayEnd).lte("due_at", tomorrowEnd);
+          break;
+        case "booked":
+          query = query.eq("stage", "Booked");
+          break;
+        case "archived":
+          query = query.in("stage", [...TERMINAL_STAGES]);
+          break;
+      }
+    }
+    return query;
   }
 
-  if (bucket) {
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
-    const tomorrowEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7, 23, 59, 59).toISOString();
-
-    switch (bucket) {
-      case "overdue":
-        query = query.lt("due_at", todayStart).not("stage", "in", '("Booked","Closed","DQ","Churned")');
-        break;
-      case "today":
-        query = query.gte("due_at", todayStart).lte("due_at", todayEnd);
-        break;
-      case "upcoming":
-        query = query.gt("due_at", todayEnd).lte("due_at", tomorrowEnd);
-        break;
-      case "booked":
-        query = query.eq("stage", "Booked");
-        break;
-      case "archived":
-        query = query.in("stage", ["Closed", "DQ", "Churned"]);
-        break;
+  // INVARIANT: the response must never silently truncate. Loop full-size pages
+  // until a short page; concatenate. A single-id lookup returns ≤1 row so the
+  // first page is always the last.
+  const rows: Record<string, unknown>[] = [];
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const { data, error } = await makeQuery().range(offset, offset + PAGE_SIZE - 1);
+    if (error) {
+      return Response.json({ error: getSupabaseErrorMessage(error) }, { status: 500 });
     }
-  }
-
-  const { data, error } = await query;
-
-  if (error) {
-    return Response.json({ error: getSupabaseErrorMessage(error) }, { status: 500 });
+    const page = (data ?? []) as unknown as Record<string, unknown>[];
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) break;
   }
 
   // Flatten the admin-only owner embed into owner_name (C1).
-  const leads = ((data ?? []) as unknown as Record<string, unknown>[]).map((row) => {
+  const leads = rows.map((row) => {
     const { owner, ...rest } = row;
     return isAdmin
       ? { ...rest, owner_name: (owner as { name?: string } | null)?.name ?? null }

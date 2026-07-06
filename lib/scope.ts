@@ -40,15 +40,36 @@ export async function getActor(req: NextRequest): Promise<Actor | null> {
   return { actorId: rep.rep_id, orgId: m.org_id as string, role: (m.role as Role) ?? "rep" };
 }
 
-// C1 — org + role/owner filter for leads list queries.
-// admin/owner → every org lead; rep → shared cold pool (owner_id null) + own.
+// The two lead views the dashboard toggles between.
+//  - "mine" → the actor's working queue: shared cold pool (owner_id null) + own.
+//  - "team" → the whole org (admin/owner only).
+export type LeadScope = "mine" | "team";
+
+// C1 (scoped) — org + role/owner filter for leads list queries, parameterized
+// by the requested view. Reps are ALWAYS confined to pool + own no matter what
+// scope they ask for (enforcement unchanged). Admin/owner get:
+//   scope="mine"                 → pool + own (their working queue)
+//   scope="team" | null (legacy) → org-wide (today's default behavior)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function scopeLeadsQuery<T extends { eq: any; or: any }>(query: T, actor: Actor): T {
+export function scopeLeadsQueryFor<T extends { eq: any; or: any }>(
+  query: T,
+  actor: Actor,
+  scope?: LeadScope | null
+): T {
   let q = query.eq("org_id", actor.orgId);
-  if (!canSeeAllLeads(actor.role)) {
+  const restrictToMine = !canSeeAllLeads(actor.role) || scope === "mine";
+  if (restrictToMine) {
     q = q.or(`owner_id.is.null,owner_id.eq.${actor.actorId}`);
   }
   return q;
+}
+
+// C1 — back-compat entry point: org-wide for admin, pool+own for reps. Exactly
+// today's behavior. Kept so callers that don't care about the mine/team toggle
+// (notifications, team, salesforce, etc.) need zero changes.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function scopeLeadsQuery<T extends { eq: any; or: any }>(query: T, actor: Actor): T {
+  return scopeLeadsQueryFor(query, actor, "team");
 }
 
 // Single-lead scope check (C2): reps may touch a lead only if it's cold
