@@ -1,9 +1,11 @@
 // Shared domain types — import from '@/lib/types' in API routes and lib code
 // For component usage, use the Lead type from @/hooks/useLeads (superset with normalization)
+import type { Stage } from "@/lib/stages";
 
-export type LeadStage =
-  | "New" | "Warming" | "DM Sent" | "Replied" | "Qualifying" | "Call Offered" | "Booked" | "Closed" | "DQ"
-  | "Active" | "At Risk" | "Churned" | "Blocked";
+// Canonical sales stages come from lib/stages.ts (single source of truth).
+// "Blocked" is retired (0 leads live). CSM stages remain here as legacy values
+// tolerated on existing rows until migration 019 retires them.
+export type LeadStage = Stage | "Active" | "At Risk" | "Churned";
 
 export type LeadMode = "sales" | "csm";
 export type LeadSource = "IG" | "LinkedIn" | "SMS" | "Email" | "Manual";

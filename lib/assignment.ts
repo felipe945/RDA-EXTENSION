@@ -1,8 +1,9 @@
 import { supabaseServer } from "@/lib/supabase";
+import { TERMINAL_STAGES, stageSqlList } from "@/lib/stages";
 
-// Terminal stages that don't count toward a rep's open workload. Mirrors the
-// "archived" bucket in app/api/leads/route.ts (Closed | DQ | Churned).
-const TERMINAL_STAGES = '("Closed","DQ","Churned")';
+// Terminal stages that don't count toward a rep's open workload (Closed | DQ |
+// Churned), sourced from lib/stages.ts and rendered as a Postgres IN() list.
+const TERMINAL_STAGES_SQL = stageSqlList(TERMINAL_STAGES);
 
 // Round-robin auto-balance: pick the rep with the fewest open leads who is still
 // under capacity. No queue, no worker — one synchronous query pass.
@@ -20,7 +21,7 @@ export async function pickNextAssignee(orgId: string): Promise<string | null> {
     .from("leads")
     .select("assigned_to")
     .eq("org_id", orgId)
-    .not("stage", "in", TERMINAL_STAGES)
+    .not("stage", "in", TERMINAL_STAGES_SQL)
     .not("assigned_to", "is", null);
 
   const counts = new Map<string, number>();

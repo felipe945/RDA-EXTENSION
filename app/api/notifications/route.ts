@@ -2,6 +2,21 @@ import { type NextRequest } from "next/server";
 import { supabaseServer } from "@/lib/supabase";
 import { getActor, scopeLeadsQuery } from "@/lib/scope";
 import { canSeeAllLeads } from "@/lib/permissions";
+import { stageSqlList } from "@/lib/stages";
+
+// Overdue leads at these stages are NOT surfaced as follow-up notifications:
+// later-funnel + terminal stages are handled elsewhere (booked flow / inbox).
+// Bespoke to this endpoint (not one of the shared queue sets); quoted via the
+// shared helper so there's no hand-written SQL fragment.
+const NOTIFY_EXCLUDED_STAGES = [
+  "Booked",
+  "Closed",
+  "DQ",
+  "Churned",
+  "Replied",
+  "Qualifying",
+  "Call Offered",
+];
 
 export async function GET(request: NextRequest) {
   const actor = await getActor(request);
@@ -52,7 +67,7 @@ export async function GET(request: NextRequest) {
   )
     .eq("mode", mode)
     .lt("due_at", new Date().toISOString())
-    .not("stage", "in", '("Booked","Closed","DQ","Churned","Replied","Qualifying","Call Offered")')
+    .not("stage", "in", stageSqlList(NOTIFY_EXCLUDED_STAGES))
     .order("due_at", { ascending: true })
     .limit(20);
 
