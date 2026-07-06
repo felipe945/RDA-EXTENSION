@@ -9,6 +9,15 @@
   self-contained, browser-pure, exports match the contracts, `npx tsc --noEmit`
   clean. Safe for T2 (stage imports) and T3 (esbuild bundle) to integrate.
 
+- **`CHECKPOINT_SCOPE: done @ f2371ad`** — `/api/leads?scope=mine|team` +
+  pagination live. `scopeLeadsQueryFor(query, actor, scope)` in `lib/scope.ts`;
+  `scopeLeadsQuery` unchanged (delegates `scope="team"`). GET paginates via a
+  `.range()` full-size-page loop (PAGE_SIZE 1000) until a short page — response
+  is complete, never truncates. **Verified live (`mode=sales`): old single fetch
+  returned 1000, new pagination returns all 1063 rows, 0 dupes.** Ordered
+  `created_at desc, id asc` (stable across pages; cold pool has null `due_at`,
+  which we deliberately do NOT backfill). T2 can integration-test the toggle.
+
 ## Contract deviations (read if integrating)
 
 - **Stage sets typed `readonly string[]`, not `Stage[]`.** `DONE_STAGES`,
@@ -35,7 +44,7 @@
 ## Status
 
 - [x] Phase 1 — shared modules → **CHECKPOINT S** (f212f41)
-- [ ] Phase 2 — scope model + pagination → CHECKPOINT SCOPE
+- [x] Phase 2 — scope model + pagination → **CHECKPOINT SCOPE** (f2371ad)
 - [ ] Phase 3 — import consistency
 - [ ] Phase 4 — guarantee the opener (flagship; cost-gated drain)
 - [ ] Phase 5 — delete dead SMS/Sendblue routes
