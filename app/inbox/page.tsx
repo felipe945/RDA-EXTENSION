@@ -2,14 +2,13 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { supabase as getSupabase } from "@/lib/supabase";
 import { useMode } from "@/components/ModeProvider";
 
 type Message = {
   id: string;
   created_at: string;
   lead_id: string | null;
-  channel: "ig" | "sms" | "email" | "linkedin";
+  channel: "ig" | "email" | "linkedin";
   direction: "inbound" | "outbound";
   body: string;
   read: boolean;
@@ -19,14 +18,12 @@ type Message = {
 
 const CHANNEL_LABELS: Record<string, string> = {
   ig: "Instagram",
-  sms: "SMS",
   email: "Email",
   linkedin: "LinkedIn",
 };
 
 const CHANNEL_COLORS: Record<string, string> = {
   ig: "text-pink-400 bg-pink-900/20 border-pink-800",
-  sms: "text-green-400 bg-green-900/20 border-green-800",
   email: "text-blue-400 bg-blue-900/20 border-blue-800",
   linkedin: "text-sky-400 bg-sky-900/20 border-sky-800",
 };
@@ -47,59 +44,52 @@ export default function InboxPage() {
   const [direction, setDirection] = useState<"inbound" | "outbound" | "all">("inbound");
 
   useEffect(() => {
-    const db = getSupabase();
-
+    // data-C1: reads go through /api/messages (org-scoped server-side) — the
+    // browser anon key can no longer SELECT messages (migration 020). Realtime
+    // went with it (anon can't subscribe); a 30s poll keeps replies flowing in.
     async function load() {
-      // messages table is created by T1 — degrade gracefully if it doesn't exist
-      let query = db
-        .from("messages")
-        .select("*, leads!inner(id, name, ig_username, mode)")
-        .eq("leads.mode", mode)
-        .order("created_at", { ascending: false })
-        .limit(100);
-
-      if (direction !== "all") {
-        query = query.eq("direction", direction);
-      }
-
-      const { data, error } = await query;
-
-      if (error) {
+      const dir = direction !== "all" ? `&direction=${direction}` : "";
+      const res = await fetch(`/api/messages?mode=${mode}${dir}&limit=100`);
+      if (!res.ok) {
         setMessages([]);
-      } else {
-        const flat = (data ?? []).map((m: Record<string, unknown>) => {
-          const lead = m.leads as { name?: string; ig_username?: string } | null;
-          return {
-            ...(m as Omit<Message, "lead_name" | "ig_username">),
-            lead_name: lead?.name ?? null,
-            ig_username: lead?.ig_username ?? null,
-          } as Message;
-        });
-        setMessages(flat);
+        setLoading(false);
+        return;
       }
+      const { messages: data } = await res.json() as { messages: Record<string, unknown>[] };
+      const flat = (data ?? []).map((m: Record<string, unknown>) => {
+        const lead = m.leads as { name?: string; ig_username?: string } | null;
+        return {
+          ...(m as Omit<Message, "lead_name" | "ig_username">),
+          lead_name: lead?.name ?? null,
+          ig_username: lead?.ig_username ?? null,
+        } as Message;
+      });
+      setMessages(flat);
       setLoading(false);
     }
     load();
 
-    const channel = db
-      .channel(`inbox-${mode}-${direction}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, () =>
-        load()
-      )
-      .subscribe();
-
-    return () => { db.removeChannel(channel); };
+    const poll = setInterval(load, 30_000);
+    return () => { clearInterval(poll); };
   }, [mode, direction]);
 
+  async function patchRead(ids: string[]) {
+    await fetch("/api/messages", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+  }
+
   async function markRead(id: string) {
-    await getSupabase().from("messages").update({ read: true }).eq("id", id);
+    await patchRead([id]);
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: true } : m)));
   }
 
   async function markAllRead() {
     const unreadIds = messages.filter((m) => !m.read).map((m) => m.id);
     if (!unreadIds.length) return;
-    await getSupabase().from("messages").update({ read: true }).in("id", unreadIds);
+    await patchRead(unreadIds);
     setMessages((prev) => prev.map((m) => ({ ...m, read: true })));
   }
 
@@ -169,7 +159,7 @@ export default function InboxPage() {
           )}
           {messages.length === 0 && (
             <p className="text-gray-700 text-xs">
-              Messages appear here when prospects reply via IG, SMS, or email.
+              Replies land here when detection is live — for now, work Replied leads from the Dashboard.
             </p>
           )}
         </div>

@@ -1,6 +1,7 @@
 import { type NextRequest } from "next/server";
 import { supabaseServer } from "@/lib/supabase";
 import { getActor, canAccessLead, type Actor } from "@/lib/scope";
+import { canSeeAllLeads } from "@/lib/permissions";
 
 // Messages hang off a lead, so scope = the lead's scope: verify the lead is
 // visible to the actor before returning or writing anything.
@@ -18,11 +19,36 @@ export async function GET(request: NextRequest) {
   const db = supabaseServer();
   const { searchParams } = request.nextUrl;
   const leadId = searchParams.get("lead_id");
-  const limit = Math.min(parseInt(searchParams.get("limit") || "5", 10), 20);
 
+  // No lead_id → inbox list: org-scoped via the lead join (data-C1 — the inbox
+  // used to read messages with the browser anon key; migration 020 closed that,
+  // this is its replacement). Reps see pool + own, same as the leads list.
   if (!leadId) {
-    return Response.json({ error: "lead_id required" }, { status: 400 });
+    const mode = searchParams.get("mode") ?? "sales";
+    const direction = searchParams.get("direction");
+    const listLimit = Math.min(parseInt(searchParams.get("limit") || "100", 10), 200);
+
+    let query = db
+      .from("messages")
+      .select("*, leads!inner(id, name, ig_username, mode, org_id, owner_id)")
+      .eq("leads.org_id", actor.orgId)
+      .eq("leads.mode", mode)
+      .order("created_at", { ascending: false })
+      .limit(listLimit);
+
+    if (direction === "inbound" || direction === "outbound") {
+      query = query.eq("direction", direction);
+    }
+    if (!canSeeAllLeads(actor.role)) {
+      query = query.or(`owner_id.is.null,owner_id.eq.${actor.actorId}`, { referencedTable: "leads" });
+    }
+
+    const { data, error } = await query;
+    if (error) return Response.json({ error: error.message }, { status: 500 });
+    return Response.json({ messages: data ?? [] });
   }
+
+  const limit = Math.min(parseInt(searchParams.get("limit") || "5", 10), 20);
 
   const scopeErr = await checkLeadScope(db, leadId, actor);
   if (scopeErr) return Response.json({ error: scopeErr.error }, { status: scopeErr.status });
@@ -126,4 +152,49 @@ export async function POST(request: NextRequest) {
   }
 
   return Response.json({ message: data }, { status: 201 });
+}
+
+// PATCH /api/messages { ids: string[] } → mark read. Replaces the inbox's
+// direct anon-key updates (data-C1). Scope check runs through each message's
+// lead: only messages on leads the actor can access get flipped — the rest are
+// silently skipped (shared-inbox mark-all just marks what you can see).
+export async function PATCH(request: NextRequest) {
+  const actor = await getActor(request);
+  if (!actor) return Response.json({ error: "unauthorized" }, { status: 401 });
+
+  let ids: string[];
+  try {
+    const body = await request.json() as { ids?: unknown };
+    ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return Response.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+  if (!ids.length) return Response.json({ error: "ids required" }, { status: 400 });
+  if (ids.length > 200) ids = ids.slice(0, 200);
+
+  const db = supabaseServer();
+  const { data: rows, error: scopeError } = await db
+    .from("messages")
+    .select("id, leads!inner(org_id, owner_id)")
+    .in("id", ids)
+    .eq("leads.org_id", actor.orgId);
+  if (scopeError) return Response.json({ error: scopeError.message }, { status: 500 });
+
+  // supabase-js types the embed as an array even for a to-one FK join —
+  // runtime is an object; handle both shapes.
+  const allowed = (rows ?? [])
+    .filter((r) => {
+      const embedded = r.leads as unknown;
+      const lead = (Array.isArray(embedded) ? embedded[0] : embedded) as
+        | { org_id: string; owner_id: string | null }
+        | null;
+      return !!lead && canAccessLead(actor, lead);
+    })
+    .map((r) => r.id as string);
+  if (!allowed.length) return Response.json({ ok: true, updated: 0 });
+
+  const { error } = await db.from("messages").update({ read: true }).in("id", allowed);
+  if (error) return Response.json({ error: error.message }, { status: 500 });
+
+  return Response.json({ ok: true, updated: allowed.length });
 }
