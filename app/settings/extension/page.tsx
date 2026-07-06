@@ -5,7 +5,8 @@
 // after Google sign-in (prod dashboard URL is its default; sign-in mints the
 // repToken and pulls settings via /api/extension/bootstrap).
 import { useEffect, useState } from "react";
-import { Puzzle, LogIn, RefreshCw, MonitorSmartphone } from "lucide-react";
+import { Puzzle, LogIn, RefreshCw, MonitorSmartphone, AtSign } from "lucide-react";
+import { toast, Toaster } from "sonner";
 import { CHROME_STORE_URL } from "@/lib/extension";
 
 type Latest = { version: string; updatedAt: string };
@@ -48,6 +49,36 @@ export default function ExtensionSetupPage() {
       .then((d) => d?.version && setLatest(d))
       .catch(() => {});
   }, []);
+
+  const [ig, setIg] = useState("");
+  const [igSaving, setIgSaving] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/extension/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d?.ok && setIg(d.personalIgUsername ?? ""))
+      .catch(() => {});
+  }, []);
+
+  async function saveIg() {
+    setIgSaving(true);
+    try {
+      const res = await fetch("/api/extension/me", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ personalIgUsername: ig.replace(/^@/, "").trim() }),
+      });
+      const d = await res.json();
+      if (!res.ok || !d.ok) {
+        toast.error(d.error || "Couldn't save — try again.");
+        return;
+      }
+      setIg(d.personalIgUsername ?? "");
+      toast.success("Personal Instagram saved");
+    } finally {
+      setIgSaving(false);
+    }
+  }
 
   const kbd =
     "rounded border border-[#2A3554] bg-[#151B2E] px-1.5 py-0.5 text-xs font-semibold text-[#CBD5E1]";
@@ -118,7 +149,38 @@ export default function ExtensionSetupPage() {
             release, no action needed. You&apos;ll always be on the latest version.
           </p>
         </Step>
+
+        <Step
+          n={4}
+          icon={<AtSign size={15} className="text-[#FF3A69]" />}
+          title="Set your personal Instagram"
+        >
+          <p className="mb-3">
+            When you DM a lead from your <strong className="text-[#E2E8F0]">Personal IG</strong>, the
+            extension switches to this account for you. Leave blank if you only use the FanBasis
+            account.
+          </p>
+          <div className="flex items-center gap-2">
+            <span className="text-[#64748B]">@</span>
+            <input
+              value={ig}
+              onChange={(e) => setIg(e.target.value.replace(/^@/, ""))}
+              placeholder="your.handle"
+              className="min-w-0 flex-1 rounded-lg border border-[#2A3554] bg-[#151B2E] px-3 py-2 text-sm text-[#E2E8F0] placeholder:text-[#475569] focus:border-[#FF3A69] focus:outline-none"
+            />
+            <button
+              onClick={saveIg}
+              disabled={igSaving}
+              className="shrink-0 rounded-lg px-4 py-2 text-sm font-semibold text-white transition-all hover:opacity-90 disabled:opacity-50"
+              style={{ background: "linear-gradient(135deg, #FF3A69, #C22450)" }}
+            >
+              {igSaving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </Step>
       </div>
+
+      <Toaster theme="dark" position="bottom-right" />
 
       <div className="mt-4 flex gap-3 rounded-xl border border-[#1A2235] bg-[#0B0F18] p-4">
         <MonitorSmartphone size={16} className="mt-0.5 shrink-0 text-[#64748B]" />
