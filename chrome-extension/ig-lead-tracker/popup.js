@@ -6,7 +6,7 @@ document.getElementById("openPanel").addEventListener("click", () => {
 });
 
 document.getElementById("openDashboard").addEventListener("click", () => {
-  chrome.storage.sync.get({ dashboardUrl: "https://unified-sales-ops.vercel.app" }, ({ dashboardUrl }) => {
+  chrome.storage.sync.get({ dashboardUrl: "https://fanmas.vercel.app" }, ({ dashboardUrl }) => {
     chrome.tabs.create({ url: dashboardUrl });
     window.close();
   });

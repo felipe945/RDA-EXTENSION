@@ -37,7 +37,7 @@ export default function PrivacyPage() {
 
       <h2 className={h2}>Where data goes</h2>
       <p className={p}>
-        Data is sent only to the FanMas dashboard (unified-sales-ops.vercel.app) and
+        Data is sent only to the FanMas dashboard (fanmas.vercel.app) and
         stored in FanBasis&apos;s own database. It is used only to operate the sales workflow:
         lead tracking, outreach, follow-ups, and call booking.
       </p>

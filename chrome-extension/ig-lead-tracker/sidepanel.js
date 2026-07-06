@@ -1,7 +1,7 @@
 // FanBasis sidepanel — unified lead pipeline + notifications
 "use strict";
 
-const DEFAULT_URL = "https://unified-sales-ops.vercel.app";
+const DEFAULT_URL = "https://fanmas.vercel.app";
 
 // ── Display timezone (shared contract with instagram.js / TZ_T1) ──────────────
 const FB_TZS = [
@@ -1230,7 +1230,7 @@ function renderLinks() {
   const draw = (boot) => {
     const ql = boot?.quicklinks || { team: [], personal: [] };
     const team = ql.team || [], personal = ql.personal || [];
-    const dashUrl = boot?.dashboardUrl || "https://unified-sales-ops.vercel.app";
+    const dashUrl = boot?.dashboardUrl || "https://fanmas.vercel.app";
     if (!team.length && !personal.length) {
       el.innerHTML = `<div class="empty-state"><div class="empty-icon">🔗</div><p>No links yet</p><span>Add links in the dashboard → Team Settings and they'll show up here.</span></div>`;
     } else {
@@ -1452,7 +1452,7 @@ loadData().then(() => {
   try {
     const res = await chrome.runtime.sendMessage({ type: "CHECK_UPDATE" }).catch(() => null);
     if (!res?.ok || !res.updateAvailable) return;
-    const { dashboardUrl } = await chrome.storage.sync.get({ dashboardUrl: "https://unified-sales-ops.vercel.app" });
+    const { dashboardUrl } = await chrome.storage.sync.get({ dashboardUrl: "https://fanmas.vercel.app" });
     document.getElementById("update-banner-text").textContent =
       `Update available: v${res.latest} (you're on v${res.current})`;
     document.getElementById("update-banner-link").href = `${dashboardUrl}/settings/extension`;

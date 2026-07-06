@@ -259,7 +259,7 @@
     // Bootstrap (cached by background after sign-in) wins over legacy storage.sync
     const [sync, local] = await Promise.all([
       new Promise((r) => chrome.storage.sync.get({
-        dashboardUrl: "https://unified-sales-ops.vercel.app",
+        dashboardUrl: "https://fanmas.vercel.app",
         igSecret: "",
         calendarUrl: "",
         personalIgUsername: "felipeguimars",
