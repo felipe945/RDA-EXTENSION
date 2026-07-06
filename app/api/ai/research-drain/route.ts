@@ -107,7 +107,12 @@ export async function GET(req: NextRequest) {
       try {
         const res = await fetch(`${base}/api/ai/research-lead`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            // research-lead is gated (getActor OR CRON_SECRET); this is the
+            // trusted internal path.
+            Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}`,
+          },
           body: JSON.stringify({ leadId }),
         });
         if (res.ok) ok++;

@@ -6,12 +6,11 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase";
 import { lookupLeadInSalesforce } from "@/lib/salesforce";
-
-const IG_SECRET = process.env.IG_EVENTS_SECRET ?? "";
+import { hasInternalSecret } from "@/lib/internal-auth";
 
 export async function POST(req: NextRequest) {
-  const auth = req.headers.get("authorization");
-  if (IG_SECRET && auth !== `Bearer ${IG_SECRET}`) {
+  // H1: fail CLOSED — unset CRON_SECRET means nobody passes, not everybody.
+  if (!hasInternalSecret(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

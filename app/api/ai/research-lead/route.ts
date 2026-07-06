@@ -7,8 +7,17 @@ import { log } from "@/lib/logger";
 import { fetchIgProfile } from "@/lib/apify";
 import { findCrossPlatformHandles } from "@/lib/research/crossPlatform";
 import { lookupLeadInSalesforce } from "@/lib/salesforce";
+import { getActor } from "@/lib/scope";
+import { hasInternalSecret } from "@/lib/internal-auth";
 
 export async function POST(req: NextRequest) {
+  // C2: session/repToken actor OR internal CRON_SECRET — anonymous callers get
+  // nothing (this route spends Claude + Apify money and writes research_cache).
+  const actor = await getActor(req);
+  if (!actor && !hasInternalSecret(req)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   let leadId: string | undefined;
 
   try {
@@ -25,12 +34,18 @@ export async function POST(req: NextRequest) {
     // Step 1: Fetch the lead
     const { data: lead, error: fetchError } = await db
       .from("leads")
-      .select("id, name, ig_username, bio, follower_count, ig_profile_url, research_status")
+      .select("id, org_id, name, ig_username, bio, follower_count, ig_profile_url, research_status")
       .eq("id", leadId)
       .maybeSingle();
 
     if (fetchError || !lead) {
       return NextResponse.json({ error: "Lead not found" }, { status: 400 });
+    }
+
+    // Cross-org tamper: an authenticated actor may only research leads in their
+    // own org. The CRON_SECRET path (actor null) is trusted and may cross orgs.
+    if (actor && lead.org_id !== actor.orgId) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
     if (lead.research_status === "complete" && !force) {

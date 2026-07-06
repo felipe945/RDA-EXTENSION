@@ -19,7 +19,12 @@ export const researchLead = inngest.createFunction(
     const result = await step.run("call-research-route", async () => {
       const res = await fetch(`${baseUrl}/api/ai/research-lead`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          // research-lead is gated (getActor OR CRON_SECRET); this is the
+          // trusted internal path.
+          Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}`,
+        },
         body: JSON.stringify({ leadId }),
       });
       if (!res.ok) throw new Error(`research-lead failed: ${res.status}`);

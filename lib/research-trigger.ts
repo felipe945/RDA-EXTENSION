@@ -19,11 +19,16 @@ export function inngestConfigured(): boolean {
 }
 
 // Fire-and-forget POST to the research route. Never awaited by callers and never
-// throws into their path.
+// throws into their path. research-lead is gated (getActor OR CRON_SECRET), so
+// this internal hop authenticates with the cron secret — unset CRON_SECRET means
+// the call 401s (fail-closed) and the drain picks the lead up once it's set.
 export function fireDirectResearch(leadId: string): void {
   fetch(`${getBaseUrl()}/api/ai/research-lead`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}`,
+    },
     body: JSON.stringify({ leadId }),
   }).catch((e) => console.error("[research-trigger] direct research fetch failed", e));
 }

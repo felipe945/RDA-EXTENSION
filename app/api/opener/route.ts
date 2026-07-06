@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase";
 import { ask } from "@/lib/claude";
+import { getActor } from "@/lib/scope";
 
 const SYSTEM = `You are a sales rep at FanBasis writing a cold Instagram DM. Every DM must follow the exact 3-part structure below — no exceptions.
 
@@ -54,16 +55,43 @@ Return ONLY the final DM text. No labels, no quotes, no explanation.`;
 
 
 
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-};
+// C3: CORS is an allowlist, never `*`. The extension calls this from its
+// background service worker (D1), so its origin is chrome-extension://<id> —
+// set EXTENSION_ID in the env. Unknown origins get no ACAO header at all.
+function corsHeaders(req: NextRequest): Record<string, string> {
+  const allowed = new Set(
+    [
+      process.env.NEXT_PUBLIC_BASE_URL,
+      "https://fanmas.vercel.app",
+      process.env.EXTENSION_ID ? `chrome-extension://${process.env.EXTENSION_ID}` : undefined,
+    ]
+      .filter((o): o is string => !!o)
+      .map((o) => o.replace(/\/+$/, ""))
+  );
+  const headers: Record<string, string> = {
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "authorization, content-type",
+    Vary: "Origin",
+  };
+  const origin = req.headers.get("origin");
+  if (origin && allowed.has(origin)) headers["Access-Control-Allow-Origin"] = origin;
+  return headers;
+}
 
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: CORS });
+export async function OPTIONS(req: NextRequest) {
+  return new NextResponse(null, { status: 204, headers: corsHeaders(req) });
 }
 
 export async function GET(req: NextRequest) {
+  const cors = corsHeaders(req);
+
+  // C3: session or Bearer repToken required — this route spends Claude money
+  // and writes research_cache.
+  const actor = await getActor(req);
+  if (!actor) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: cors });
+  }
+
   const { searchParams } = new URL(req.url);
   const leadId    = searchParams.get("lead_id");
   const channel   = searchParams.get("channel") || "ig_fanbasis";
@@ -79,18 +107,25 @@ export async function GET(req: NextRequest) {
   if (leadId) {
     try {
       const db = supabaseServer();
+      // Org-scoped: a foreign-org (or nonexistent) lead_id reads as not-found —
+      // don't fall through to the generic generator with attacker-fed params.
       const { data: lead } = await db
         .from("leads")
         .select("research_cache, name, bio, follower_count, ig_username")
         .eq("id", leadId)
+        .eq("org_id", actor.orgId)
         .maybeSingle();
+
+      if (!lead) {
+        return NextResponse.json({ error: "lead not found" }, { status: 404, headers: cors });
+      }
 
       if (!fresh && lead?.research_cache?.openers) {
         const cached = channel === "ig_personal"
           ? lead.research_cache.openers.personal || lead.research_cache.openers.ig
           : lead.research_cache.openers.ig;
         if (cached) {
-          return NextResponse.json({ opener: cached, source: "cache" }, { headers: CORS });
+          return NextResponse.json({ opener: cached, source: "cache" }, { headers: cors });
         }
       }
 
@@ -122,28 +157,29 @@ export async function GET(req: NextRequest) {
         await db
           .from("leads")
           .update({ research_cache: nextCache, updated_at: new Date().toISOString() })
-          .eq("id", leadId);
+          .eq("id", leadId)
+          .eq("org_id", actor.orgId);
       } catch (e) {
         console.error("[opener] failed to persist generated opener", e);
       }
 
-      return NextResponse.json({ opener, source: "generated" }, { headers: CORS });
+      return NextResponse.json({ opener, source: "generated" }, { headers: cors });
     } catch {
       // fall through to non-lead path
     }
   }
 
   if (!username && !name && !bio) {
-    return NextResponse.json({ opener: null }, { status: 400, headers: CORS });
+    return NextResponse.json({ opener: null }, { status: 400, headers: cors });
   }
 
   try {
     const userMsg = buildUserMsg(username, name, bio, followers, channel, fresh);
     const opener = await ask(SYSTEM, userMsg, 500, 0.9);
-    return NextResponse.json({ opener: opener.trim(), source: "generated" }, { headers: CORS });
+    return NextResponse.json({ opener: opener.trim(), source: "generated" }, { headers: cors });
   } catch (err) {
     console.error("[opener]", err);
-    return NextResponse.json({ error: "Generation failed" }, { status: 500, headers: CORS });
+    return NextResponse.json({ error: "Generation failed" }, { status: 500, headers: cors });
   }
 }
 

@@ -12,9 +12,14 @@
 //   - /api/sendblue          SMS webhook, authenticates via its own secret
 //   - /api/inngest           Inngest, authenticates via signed requests
 //   - /api/leads/batch-enrich, /api/salesforce/batch
-//                            CLI/script callers, enforce their own `authorization` secret
-//   - /api/ai/research-lead  called server-to-server (Inngest fn + ig-events fallback), no cookie
-//   - /api/opener            Chrome extension AI opener — public generator (open CORS, no cookie)
+//                            CLI/script callers — require `Authorization: Bearer
+//                            $CRON_SECRET` (hasInternalSecret, fail-closed)
+//   - /api/ai/research-lead  self-authenticates via getActor OR CRON_SECRET
+//                            (Inngest fn / drain / ig-events fallback send the
+//                            secret; extension sends Bearer repToken)
+//   - /api/opener            self-authenticates via getActor (session or Bearer
+//                            repToken) + CORS origin allowlist — no cookie needed
+//                            so it stays open here (extension calls pre-session)
 //   - /api/log               logging sink (may fire before a session exists)
 //   - /api/invites/preview   login-page invite lookup; the visitor isn't signed
 //                            in yet — the uuid invite token is the credential
@@ -25,9 +30,9 @@
 //   - /api/leads/*, /api/messages, /api/notifications, /api/stats/*
 //                            SPLIT wave: authenticated by getActor() in every
 //                            handler — NextAuth session OR Bearer repToken
-//                            (the extension has no cookie). The session-only
-//                            routes under these prefixes (assign-next,
-//                            bulk-import) do their own getServerSession check.
+//                            (the extension has no cookie). assign-next adds a
+//                            role gate (admin/owner) on top of getActor;
+//                            bulk-import does its own getServerSession check.
 // These each authenticate themselves internally, so bypassing the session check
 // here does not expose data.
 import { getToken } from "next-auth/jwt";
