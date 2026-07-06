@@ -76,7 +76,7 @@ export default function LeadPage({ params }: { params: Promise<{ id: string }> }
         </div>
       </div>
 
-      {/* Detail panel: Overview / Research / Activity tabs */}
+      {/* Detail panel: Overview / Research / History tabs */}
       <LeadDetailPanel lead={lead} />
     </div>
   );

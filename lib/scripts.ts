@@ -5,6 +5,9 @@ export type Script = {
   stages: string[];
   text: string;
   subject?: string;
+  // Pinned to the "Top scripts" strip on /scripts — keep this to ~6, one per
+  // stage-cluster (opener, formal, 2nd-touch, follow-up, close, email).
+  featured?: boolean;
 };
 
 export const SCRIPTS: Script[] = [
@@ -14,6 +17,7 @@ export const SCRIPTS: Script[] = [
 
   {
     id: "personal-familiar",
+    featured: true,
     label: "You Look Familiar",
     category: "personal",
     stages: ["New"],
@@ -54,6 +58,7 @@ export const SCRIPTS: Script[] = [
 
   {
     id: "formal-love-what-built",
+    featured: true,
     label: "Love What You've Built",
     category: "formal",
     stages: ["New"],
@@ -72,6 +77,7 @@ export const SCRIPTS: Script[] = [
 
   {
     id: "fanbasis-acct-main",
+    featured: true,
     label: "FanBasis Acct Follow-Up",
     category: "fanbasis-acct",
     stages: ["DM Sent"],
@@ -89,6 +95,7 @@ export const SCRIPTS: Script[] = [
 
   {
     id: "fu-value-bump",
+    featured: true,
     label: "Value + CTA Bump",
     category: "followup",
     stages: ["DM Sent"],
@@ -168,6 +175,7 @@ export const SCRIPTS: Script[] = [
 
   {
     id: "pitch-call",
+    featured: true,
     label: "Book a Call",
     category: "pitch",
     stages: ["Call Offered", "Qualifying"],
@@ -199,6 +207,7 @@ export const SCRIPTS: Script[] = [
 
   {
     id: "email-cold-1",
+    featured: true,
     label: "Quick Math",
     category: "email",
     stages: ["New", "Warming"],

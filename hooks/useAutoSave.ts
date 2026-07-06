@@ -28,10 +28,13 @@ export function useAutoSave<T>({
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastDataRef = useRef<string>("");
+  // Seed with the initial data during render — seeding in a mount effect runs
+  // AFTER the dirty-check effect, which read "" and flagged unsaved changes on load.
+  const lastDataRef = useRef<string | null>(null);
   const isMountedRef = useRef(true);
 
   const serialized = JSON.stringify(data);
+  if (lastDataRef.current === null) lastDataRef.current = serialized;
 
   const performSave = useCallback(async () => {
     if (!isMountedRef.current) return;
@@ -65,7 +68,6 @@ export function useAutoSave<T>({
 
   useEffect(() => {
     isMountedRef.current = true;
-    if (!lastDataRef.current) lastDataRef.current = serialized;
     return () => {
       isMountedRef.current = false;
       if (timeoutRef.current) clearTimeout(timeoutRef.current);

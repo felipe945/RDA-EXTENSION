@@ -5,12 +5,13 @@ import { usePathname } from "next/navigation";
 import { useMode } from "@/components/ModeProvider";
 import { useSession, signIn, signOut } from "next-auth/react";
 import { useEffect, useState } from "react";
-import { LayoutGrid, Send, MessageSquare, BookOpen, Users, Puzzle } from "lucide-react";
+import { LayoutGrid, Send, BookOpen, Users, Puzzle } from "lucide-react";
 
+// /inbox stays routable but is hidden from the nav until reply detection
+// produces real messages — an always-empty inbox erodes trust in the rest.
 const NAV_LINKS = [
   { href: "/",                   label: "Dashboard", icon: LayoutGrid },
   { href: "/outreach",           label: "Outreach",  icon: Send },
-  { href: "/inbox",              label: "Inbox",     icon: MessageSquare },
   { href: "/scripts",            label: "Scripts",   icon: BookOpen },
   { href: "/settings/team",      label: "Team",      icon: Users },
   { href: "/settings/extension", label: "Extension", icon: Puzzle },
@@ -63,11 +64,10 @@ export default function Nav() {
       <nav className="flex-1 px-3 pt-3 space-y-0.5">
         {NAV_LINKS.map(({ href, label, icon: Icon }) => {
           const isActive = pathname === href || (href !== "/" && pathname.startsWith(href));
-          const badge =
-            href === "/" && urgentCount > 0 ? urgentCount :
-            href === "/inbox" && counts.unread > 0 ? counts.unread : null;
+          const badge = href === "/" && urgentCount > 0 ? urgentCount : null;
           return (
             <Link key={href} href={href}
+              title={badge !== null ? `${counts.overdue} overdue + ${counts.replied} replied` : undefined}
               className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors relative"
               style={isActive
                 ? { background: 'rgba(59,130,246,0.12)', color: '#60A5FA' }
@@ -78,7 +78,7 @@ export default function Nav() {
               {label}
               {badge !== null && (
                 <span className="ml-auto min-w-[18px] h-[18px] px-1 text-[10px] font-bold text-white rounded-full flex items-center justify-center"
-                  style={{ background: href === "/inbox" ? '#A78BFA' : '#FF3A69' }}>
+                  style={{ background: '#FF3A69' }}>
                   {badge > 99 ? "99+" : badge}
                 </span>
               )}

@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import type { Lead } from "@/hooks/useLeads";
-import { stageColor } from "@/lib/stage-colors";
+import { STAGES, stageColor, isKnownStage } from "@/lib/stages";
 import { IgHandle, isSnoozed, type LeadPlus } from "@/components/ig";
 import { OwnerChip, OwnerControl } from "@/components/OwnerControl";
 
@@ -16,9 +16,6 @@ const BORDER_COLORS: Record<UrgencyBucket, string> = {
   booked: "border-l-[#4a7abf]",
   archived: "border-l-[#4a5244]",
 };
-
-const SALES_STAGES = ["New", "Warming", "DM Sent", "Replied", "Qualifying", "Call Offered", "Booked", "Closed", "DQ"];
-const CSM_STAGES = ["Active", "At Risk", "Churned"];
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -64,8 +61,9 @@ export default function LeadCard({ lead: leadProp, urgency, ownerLabel }: { lead
   const [expanded, setExpanded] = useState(false);
   const [note, setNote] = useState("");
   const [undoStage, setUndoStage] = useState<{ prev: string; timer: ReturnType<typeof setTimeout> } | null>(null);
-  const isSales = SALES_STAGES.includes(lead.stage);
-  const stages = isSales ? SALES_STAGES : CSM_STAGES;
+  // One canonical stage list (Contract STAGES). Unknown/legacy stages render
+  // as an extra gray chip via stageColor instead of flipping to a CSM list.
+  const stages = isKnownStage(lead.stage) ? STAGES : [lead.stage, ...STAGES];
 
   useEffect(() => {
     return () => { if (undoStage) clearTimeout(undoStage.timer); };
@@ -99,7 +97,7 @@ export default function LeadCard({ lead: leadProp, urgency, ownerLabel }: { lead
   }
 
   async function archive() {
-    await patchLead({ stage: isSales ? "DQ" : "Churned" });
+    await patchLead({ stage: "DQ" });
   }
 
   const lastEvent = lead.ig_events?.at(-1);

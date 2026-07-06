@@ -44,7 +44,11 @@ interface Props {
 }
 
 export default function BookCallModal({ lead, onClose, onBooked, mode = "book" }: Props) {
-  const offering = mode === "availability";
+  // The prop picks the starting mode; the header toggle switches between
+  // booking and offer-times without reopening the modal (callers only need
+  // one entry button).
+  const [activeMode, setActiveMode] = useState<"book" | "availability">(mode);
+  const offering = activeMode === "availability";
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -320,6 +324,28 @@ export default function BookCallModal({ lead, onClose, onBooked, mode = "book" }
               {offering ? `offer times · ${name}` : `${SLOT_MINS} min · ${name}`}
             </div>
           </div>
+          {!done && (
+            <div className="flex rounded-lg p-0.5 mr-2" style={{ background: "#151B2E", border: "1px solid #1E2640" }}>
+              {(["book", "availability"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => {
+                    if (m === activeMode) return;
+                    setActiveMode(m);
+                    // confirm doesn't exist in availability mode; a picked
+                    // slot belongs to the flow it was picked in
+                    setStep("date");
+                    setSelectedSlot(null);
+                    setBookError(null);
+                  }}
+                  className="rounded-md px-2 py-1 text-[11px] font-semibold transition-colors"
+                  style={activeMode === m ? { background: "#1E2640", color: "#E2E8F0" } : { color: "#475569" }}
+                >
+                  {m === "book" ? "Book" : "Offer times"}
+                </button>
+              ))}
+            </div>
+          )}
           <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
             style={{ background: "#1A2235", color: "#475569" }}
             onMouseEnter={e => { (e.currentTarget).style.color = "#94A3B8"; }}

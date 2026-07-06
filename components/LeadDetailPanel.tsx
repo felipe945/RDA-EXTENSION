@@ -1,23 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { supabase as getSupabase } from "@/lib/supabase";
+import Link from "next/link";
 import type { Lead } from "@/hooks/useLeads";
 import { useAutoSave } from "@/hooks/useAutoSave";
 import { type LeadPlus } from "@/components/ig";
+import { STAGES, isKnownStage } from "@/lib/stages";
 import { TouchChips } from "@/components/TouchChips";
 import { OwnerControl } from "@/components/OwnerControl";
 import { SnoozeControl } from "@/components/SnoozeControl";
-import ScriptsVault from "@/components/ScriptsVault";
 import ComposeEmail from "@/components/ComposeEmail";
-import ComposeSMS from "@/components/ComposeSMS";
-import TouchpointsTab from "@/components/TouchpointsTab";
 import BookCallModal from "@/components/BookCallModal";
 
-type Tab = "overview" | "research" | "scripts" | "activity" | "touchpoints";
-
-const SALES_STAGES = ["New", "Warming", "DM Sent", "Replied", "Qualifying", "Call Offered", "Booked", "Closed", "DQ", "Blocked"];
-const CSM_STAGES = ["Active", "At Risk", "Churned"];
+type Tab = "overview" | "research" | "history";
 
 function formatGmv(value: unknown): string {
   if (value == null) return "—";
@@ -40,29 +35,30 @@ function relativeTime(iso: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+// ONE write path for every lead mutation: the /api/leads PATCH — same as the
+// outreach card — so the server's claim-on-touch + owner stamping always fires.
+// (Direct supabase writes from here used to bypass it.)
+async function patchLead(id: string, fields: Record<string, unknown>) {
+  await fetch("/api/leads", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, ...fields, updated_at: new Date().toISOString() }),
+  });
+}
+
 // ----------------------------------------------------------------
 // Overview Tab
 // ----------------------------------------------------------------
 function OverviewTab({ lead: leadRaw }: { lead: Lead }) {
   const lead = leadRaw as LeadPlus;
-  const isSales = SALES_STAGES.includes(lead.stage);
-  const stages = isSales ? SALES_STAGES : CSM_STAGES;
-  const db = getSupabase();
+  // Canonical stages only; a legacy/unknown stage shows as an extra chip so
+  // it's visible without being an option we keep writing.
+  const stages = isKnownStage(lead.stage) ? STAGES : [lead.stage, ...STAGES];
   const [notesValue, setNotesValue] = useState(lead.notes ?? "");
   const [bookMode, setBookMode] = useState<"book" | "availability" | null>(null);
 
   async function updateField(field: string, value: string) {
-    await db
-      .from("leads")
-      .update({ [field]: value || null, updated_at: new Date().toISOString() })
-      .eq("id", lead.id);
-  }
-
-  async function updateStage(stage: string) {
-    await db
-      .from("leads")
-      .update({ stage, updated_at: new Date().toISOString() })
-      .eq("id", lead.id);
+    await patchLead(lead.id, { [field]: value || null });
   }
 
   const { status: notesSaveStatus } = useAutoSave({
@@ -101,7 +97,7 @@ function OverviewTab({ lead: leadRaw }: { lead: Lead }) {
           {stages.map((s) => (
             <button
               key={s}
-              onClick={() => updateStage(s)}
+              onClick={() => patchLead(lead.id, { stage: s })}
               className="px-3 py-1 rounded-full text-xs border transition-colors"
               style={
                 lead.stage === s
@@ -144,14 +140,6 @@ function OverviewTab({ lead: leadRaw }: { lead: Lead }) {
           leadId={lead.id}
           to={lead.email}
           defaultSubject="Hey, quick question"
-        />
-      )}
-
-      {/* SMS compose */}
-      {lead.phone && (
-        <ComposeSMS
-          leadId={lead.id}
-          to={lead.phone}
         />
       )}
 
@@ -252,10 +240,12 @@ function ResearchTab({ lead }: { lead: Lead }) {
     setTriggering(true);
     setTriggerError(null);
     try {
+      // force: also regenerate for off-type statuses (enriched*, error) —
+      // every non-complete lead gets a working path to an opener.
       const res = await fetch("/api/ai/research-lead", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: lead.id }),
+        body: JSON.stringify({ leadId: lead.id, force: true }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
@@ -327,7 +317,6 @@ function ResearchTab({ lead }: { lead: Lead }) {
     ig?: string;
     email?: { subject?: string; body?: string };
     linkedin?: string;
-    sms?: string;
   } | null | undefined;
 
   const igOpener = openers?.ig ?? (typeof c.suggestedOpener === "string" ? c.suggestedOpener : null);
@@ -347,12 +336,6 @@ function ResearchTab({ lead }: { lead: Lead }) {
     icon: "✉",
     url: `mailto:${lead.email}`,
     handle: lead.email,
-  });
-  if (lead.phone) contacts.push({
-    label: "SMS",
-    icon: "💬",
-    url: `sms:${lead.phone}`,
-    handle: lead.phone,
   });
   if (lead.linkedin_url) contacts.push({
     label: "LinkedIn",
@@ -398,7 +381,7 @@ function ResearchTab({ lead }: { lead: Lead }) {
               <a
                 key={cp.label}
                 href={cp.url}
-                target={cp.url.startsWith("mailto:") || cp.url.startsWith("sms:") ? "_self" : "_blank"}
+                target={cp.url.startsWith("mailto:") ? "_self" : "_blank"}
                 rel="noopener noreferrer"
                 className="flex items-center gap-3 px-3 py-2 rounded-xl transition-colors group cursor-pointer" style={{ background: '#0F1420', border: '1px solid #1A2235' }} onMouseEnter={(e)=>(e.currentTarget.style.borderColor='#2A3554')} onMouseLeave={(e)=>(e.currentTarget.style.borderColor='#1A2235')}
               >
@@ -458,13 +441,12 @@ function ResearchTab({ lead }: { lead: Lead }) {
       )}
 
       {/* Per-channel AI openers */}
-      {(igOpener || openers?.email || openers?.linkedin || openers?.sms) && (
+      {(igOpener || openers?.email || openers?.linkedin) && (
         <div>
           <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">AI Openers</p>
           <div className="space-y-2">
             {igOpener && <OpenerCard label="IG DM" text={igOpener} />}
             {openers?.linkedin && <OpenerCard label="LinkedIn" text={openers.linkedin} />}
-            {openers?.sms && <OpenerCard label="SMS" text={openers.sms} />}
             {openers?.email && (
               <div className="bg-gray-900/60 border border-gray-800 rounded-lg p-3 space-y-2">
                 <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Email</span>
@@ -537,46 +519,244 @@ function ResearchRow({ label, children }: { label: string; children: React.React
 }
 
 // ----------------------------------------------------------------
-// Activity Tab
+// History Tab — the old "Outreach" (touchpoint logger) and "Activity"
+// (IG event feed) tabs merged: log on top, feeds below. One place for
+// everything that already happened with this lead.
 // ----------------------------------------------------------------
-function ActivityTab({ lead }: { lead: Lead }) {
+type Touchpoint = {
+  id: string;
+  channel: string;
+  result: string;
+  note: string | null;
+  tried_at: string;
+};
+
+type TouchChannel = { key: string; label: string; icon: string; ring: string };
+
+const TOUCH_CHANNELS: TouchChannel[] = [
+  { key: "ig_dm",       label: "IG DM",       icon: "📷", ring: "border-pink-700 text-pink-300 bg-pink-950/30" },
+  { key: "ig_fanbasis", label: "IG FanBasis",  icon: "📸", ring: "border-pink-700 text-pink-300 bg-pink-950/30" },
+  { key: "ig_personal", label: "IG Personal",  icon: "📷", ring: "border-purple-700 text-purple-300 bg-purple-950/30" },
+  { key: "email",       label: "Email",        icon: "✉",  ring: "border-blue-700 text-blue-300 bg-blue-950/30" },
+  { key: "linkedin",    label: "LinkedIn",     icon: "💼", ring: "border-sky-700 text-sky-300 bg-sky-950/30" },
+  { key: "youtube",     label: "YouTube",      icon: "▶",  ring: "border-red-700 text-red-300 bg-red-950/30" },
+  { key: "call",        label: "Call",         icon: "📞", ring: "border-yellow-700 text-yellow-300 bg-yellow-950/30" },
+  { key: "loom",        label: "Loom",         icon: "🎥", ring: "border-purple-700 text-purple-300 bg-purple-950/30" },
+];
+
+const TOUCH_RESULTS = [
+  { key: "sent",     label: "Sent",     dot: "bg-blue-500" },
+  { key: "no_reply", label: "No Reply", dot: "bg-gray-500" },
+  { key: "replied",  label: "Replied",  dot: "bg-green-500" },
+  { key: "booked",   label: "Booked",   dot: "bg-[#ff0076]" },
+  { key: "bounced",  label: "Bounced",  dot: "bg-red-500" },
+];
+
+function HistoryTab({ lead }: { lead: Lead }) {
+  const [saving, setSaving] = useState(false);
+  const [addingNote, setAddingNote] = useState<string | null>(null);
+  const [noteText, setNoteText] = useState("");
+
+  const touchpoints = (lead.outreach_log ?? []) as Touchpoint[];
+  const sorted = [...touchpoints].sort(
+    (a, b) => new Date(b.tried_at).getTime() - new Date(a.tried_at).getTime()
+  );
+
+  const tried    = new Set(touchpoints.map((t) => t.channel));
+  const untried  = TOUCH_CHANNELS.filter((c) => !tried.has(c.key));
+  const triedChs = TOUCH_CHANNELS.filter((c) => tried.has(c.key));
+
   const events = lead.ig_events ?? [];
 
-  if (events.length === 0) {
-    return (
-      <div className="py-12 text-center">
-        <p className="text-sm text-gray-600">No IG activity logged yet.</p>
-        <p className="text-xs text-gray-700 mt-1">
-          Events will appear when the Chrome extension tracks interactions.
-        </p>
-      </div>
-    );
+  async function log(channel: string, result = "sent", note?: string) {
+    setSaving(true);
+    await fetch(`/api/leads/${lead.id}/touchpoints`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel, result, note: note || undefined }),
+    });
+    setSaving(false);
+    setAddingNote(null);
+    setNoteText("");
+  }
+
+  async function updateResult(touchpointId: string, result: string) {
+    await fetch(`/api/leads/${lead.id}/touchpoints`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ touchpointId, result }),
+    });
   }
 
   return (
-    <div className="space-y-0">
-      {[...events].reverse().map((ev, i) => (
-        <div
-          key={i}
-          className="flex items-center gap-3 py-2.5 border-b border-gray-800/60 text-sm"
-        >
-          <span className="text-xs text-gray-600 w-24 shrink-0">
-            {new Date(ev.ts).toLocaleDateString()}
-          </span>
-          <span className="text-gray-300 capitalize flex-1">{ev.type}</span>
-          <span className="text-xs text-gray-600 shrink-0">{relativeTime(ev.ts)}</span>
-          {ev.postUrl && (
-            <a
-              href={ev.postUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-blue-500 hover:underline shrink-0"
-            >
-              post &rarr;
-            </a>
-          )}
+    <div className="space-y-5">
+      {/* Channel coverage bar */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs text-gray-500 uppercase tracking-wide">Coverage</p>
+          <span className="text-xs text-gray-600">{tried.size}/{TOUCH_CHANNELS.length} channels</span>
         </div>
-      ))}
+        <div className="flex gap-1.5 flex-wrap">
+          {TOUCH_CHANNELS.map((ch) => {
+            const hit = tried.has(ch.key);
+            const last = [...touchpoints].reverse().find((t) => t.channel === ch.key);
+            const dot  = last ? TOUCH_RESULTS.find((r) => r.key === last.result)?.dot : undefined;
+            return (
+              <div
+                key={ch.key}
+                className={`flex items-center gap-1.5 px-2 py-1 rounded border text-xs ${
+                  hit ? ch.ring : "border-gray-800 text-gray-600"
+                }`}
+              >
+                <span>{ch.icon}</span>
+                <span>{ch.label}</span>
+                {hit && dot && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Log untried channel */}
+      {untried.length > 0 && (
+        <div>
+          <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">Log outreach</p>
+          <div className="flex gap-1.5 flex-wrap">
+            {untried.map((ch) =>
+              addingNote === ch.key ? (
+                <div
+                  key={ch.key}
+                  className="flex items-center gap-1.5 bg-gray-900 border border-gray-600 rounded-lg px-2.5 py-1.5"
+                >
+                  <span>{ch.icon}</span>
+                  <input
+                    autoFocus
+                    value={noteText}
+                    onChange={(e) => setNoteText(e.target.value)}
+                    placeholder="note (optional)"
+                    className="bg-transparent text-xs text-gray-200 outline-none w-28 placeholder:text-gray-600"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") log(ch.key, "sent", noteText);
+                      if (e.key === "Escape") setAddingNote(null);
+                    }}
+                  />
+                  <button
+                    onClick={() => log(ch.key, "sent", noteText)}
+                    disabled={saving}
+                    className="text-xs text-[#ff0076] hover:text-[#e0006a] font-medium"
+                  >
+                    Log
+                  </button>
+                </div>
+              ) : (
+                <button
+                  key={ch.key}
+                  onClick={() => { setAddingNote(ch.key); setNoteText(""); }}
+                  disabled={saving}
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-700 rounded-lg text-xs text-gray-400 hover:border-gray-500 hover:text-gray-200 transition-colors disabled:opacity-40"
+                >
+                  <span>{ch.icon}</span>
+                  <span>{ch.label}</span>
+                </button>
+              )
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Re-try a tried channel */}
+      {triedChs.length > 0 && (
+        <div>
+          <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">Log another attempt</p>
+          <div className="flex gap-1.5 flex-wrap">
+            {triedChs.map((ch) => (
+              <button
+                key={ch.key}
+                onClick={() => log(ch.key)}
+                disabled={saving}
+                className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs transition-colors disabled:opacity-40 ${ch.ring}`}
+              >
+                <span>{ch.icon}</span>
+                <span>+ {ch.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Touchpoint timeline */}
+      <div>
+        <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">
+          Outreach ({touchpoints.length})
+        </p>
+        {sorted.length === 0 ? (
+          <p className="text-sm text-gray-600 py-6 text-center">
+            No outreach logged yet — tap a channel above.
+          </p>
+        ) : (
+          <div className="space-y-0">
+            {sorted.map((tp) => {
+              const ch = TOUCH_CHANNELS.find((c) => c.key === tp.channel);
+              return (
+                <div key={tp.id} className="flex items-center gap-3 py-2.5 border-b border-gray-800/60">
+                  <span className="text-sm w-5 text-center shrink-0">{ch?.icon ?? "?"}</span>
+                  <span className="text-xs text-gray-300 w-16 shrink-0">{ch?.label ?? tp.channel}</span>
+                  <select
+                    defaultValue={tp.result}
+                    onChange={(e) => updateResult(tp.id, e.target.value)}
+                    className="text-xs bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-gray-300 outline-none cursor-pointer"
+                  >
+                    {TOUCH_RESULTS.map((r) => (
+                      <option key={r.key} value={r.key}>{r.label}</option>
+                    ))}
+                  </select>
+                  {tp.note && (
+                    <span className="text-xs text-gray-600 flex-1 truncate italic">&ldquo;{tp.note}&rdquo;</span>
+                  )}
+                  <span className="text-xs text-gray-600 shrink-0 ml-auto">{relativeTime(tp.tried_at)}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* IG activity feed (from the Chrome extension) */}
+      <div>
+        <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">
+          IG Activity ({events.length})
+        </p>
+        {events.length === 0 ? (
+          <p className="text-sm text-gray-600 py-6 text-center">
+            No IG activity yet — events appear when the Chrome extension tracks interactions.
+          </p>
+        ) : (
+          <div className="space-y-0">
+            {[...events].reverse().map((ev, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-3 py-2.5 border-b border-gray-800/60 text-sm"
+              >
+                <span className="text-xs text-gray-600 w-24 shrink-0">
+                  {new Date(ev.ts).toLocaleDateString()}
+                </span>
+                <span className="text-gray-300 capitalize flex-1">{ev.type}</span>
+                <span className="text-xs text-gray-600 shrink-0">{relativeTime(ev.ts)}</span>
+                {ev.postUrl && (
+                  <a
+                    href={ev.postUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-blue-500 hover:underline shrink-0"
+                  >
+                    post &rarr;
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -587,20 +767,18 @@ function ActivityTab({ lead }: { lead: Lead }) {
 export default function LeadDetailPanel({ lead }: { lead: Lead }) {
   const [tab, setTab] = useState<Tab>("overview");
 
-  const touchpointCount = (lead.outreach_log ?? []).length;
+  const historyCount = (lead.outreach_log ?? []).length + (lead.ig_events ?? []).length;
 
   const tabs: { id: Tab; label: string; badge?: number }[] = [
-    { id: "overview",    label: "Overview" },
-    { id: "touchpoints", label: "Outreach", badge: touchpointCount || undefined },
-    { id: "scripts",     label: "Scripts" },
-    { id: "research",    label: "Research" },
-    { id: "activity",    label: "Activity" },
+    { id: "overview", label: "Overview" },
+    { id: "research", label: "Research" },
+    { id: "history",  label: "History", badge: historyCount || undefined },
   ];
 
   return (
     <div className="space-y-0">
-      {/* Tab bar */}
-      <div className="flex border-b" style={{ borderColor: '#1A2235' }}>
+      {/* Tab bar — 3 tabs; scripts live on /scripts, pre-filtered to this stage */}
+      <div className="flex items-center border-b" style={{ borderColor: '#1A2235' }}>
         {tabs.map(({ id: tabId, label, badge }) => (
           <button
             key={tabId}
@@ -623,21 +801,19 @@ export default function LeadDetailPanel({ lead }: { lead: Lead }) {
             )}
           </button>
         ))}
+        <Link
+          href={`/scripts?stage=${encodeURIComponent(lead.stage)}`}
+          className="ml-auto px-4 py-2 text-sm text-[#475569] hover:text-[#94A3B8] transition-colors"
+        >
+          Scripts →
+        </Link>
       </div>
 
       {/* Tab content */}
       <div className="pt-5">
-        {tab === "overview"    && <OverviewTab lead={lead} />}
-        {tab === "touchpoints" && <TouchpointsTab lead={lead} />}
-        {tab === "scripts"     && (
-          <ScriptsVault
-            leadStage={lead.stage}
-            leadName={lead.name ?? lead.ig_username ?? undefined}
-            compact
-          />
-        )}
-        {tab === "research"    && <ResearchTab lead={lead} />}
-        {tab === "activity"    && <ActivityTab lead={lead} />}
+        {tab === "overview" && <OverviewTab lead={lead} />}
+        {tab === "research" && <ResearchTab lead={lead} />}
+        {tab === "history"  && <HistoryTab lead={lead} />}
       </div>
     </div>
   );
