@@ -2,6 +2,7 @@
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
+import Logo from "@/components/Logo";
 
 type InvitePreview = {
   inviter: string | null;
@@ -13,12 +14,8 @@ type InvitePreview = {
 
 function FBMark() {
   return (
-    <div
-      className="mx-auto mb-4 flex h-9 w-9 items-center justify-center rounded-lg text-[13px] font-extrabold tracking-tight text-white"
-      style={{ background: "linear-gradient(135deg, #FF3A69, #C22450)" }}
-      aria-hidden="true"
-    >
-      FB
+    <div className="mx-auto mb-4 flex h-9 w-9 items-center justify-center" aria-hidden="true">
+      <Logo size={36} />
     </div>
   );
 }
@@ -109,7 +106,7 @@ function LoginForm() {
           <h1 className="mb-1 text-xl font-semibold text-[#E2E8F0]">
             {inviterFirst ? `${inviterFirst} invited you` : "You're invited"}
           </h1>
-          <p className="mb-5 text-sm text-[#94A3B8]">Join FanBasis Sales Ops</p>
+          <p className="mb-5 text-sm text-[#94A3B8]">Join FanMas</p>
           <div className="mb-5 rounded-lg border border-[#2A3554] bg-[#151B2E] px-4 py-3 text-left text-sm">
             <div className="text-[#E2E8F0]">
               For <span className="font-semibold">{pendingInvite.email}</span>
@@ -126,7 +123,7 @@ function LoginForm() {
         </>
       ) : (
         <>
-          <h1 className="mb-2 text-xl font-semibold text-[#E2E8F0]">FanBasis Sales Ops</h1>
+          <h1 className="mb-2 text-xl font-semibold text-[#E2E8F0]">FanMas</h1>
           <p className="mb-6 text-sm text-[#94A3B8]">Sign in with your FanBasis Google account.</p>
         </>
       )}
@@ -186,7 +183,7 @@ function LoginFallback() {
   return (
     <div className="w-full max-w-sm rounded-xl border border-[#1A2235] bg-[#0F1420] p-8 text-center">
       <FBMark />
-      <h1 className="mb-2 text-xl font-semibold text-[#E2E8F0]">FanBasis Sales Ops</h1>
+      <h1 className="mb-2 text-xl font-semibold text-[#E2E8F0]">FanMas</h1>
       <p className="text-sm text-[#94A3B8]">Loading…</p>
     </div>
   );

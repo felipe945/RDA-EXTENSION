@@ -3,11 +3,26 @@
 
 const DEFAULT_URL = "https://unified-sales-ops.vercel.app";
 
+// ── Display timezone (shared contract with instagram.js / TZ_T1) ──────────────
+const FB_TZS = [
+  { id: "America/New_York", label: "ET" },
+  { id: "America/Chicago",  label: "CT" },
+  { id: "America/Denver",   label: "MT" },
+  { id: "America/Los_Angeles", label: "PT" },
+];
+function fbTzLabel(id) { return (FB_TZS.find(t => t.id === id) || FB_TZS[0]).label; }
+function fbFmtTime(iso, tz) {
+  const p = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true }).formatToParts(new Date(iso));
+  const g = t => p.find(x => x.type === t)?.value || "";
+  const m = g("minute");
+  return `${m === "00" ? g("hour") : `${g("hour")}:${m}`} ${g("dayPeriod")}`;
+}
+function fbFmtDay(iso, tz) { return new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", month: "short", day: "numeric" }).format(new Date(iso)); }
+function fbDayKey(iso, tz) { return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso)); }
+
 let allLeads = [];
-let notifications = [];
 let overdueLeads = [];
-let activeFilter = "all";
-let activeTab = "notifs";
+let activeTab = "outreach";
 let dashboardUrl = DEFAULT_URL;
 let repToken = "";
 
@@ -90,11 +105,6 @@ function stageColor(stage) {
   return c[stage] || "#64748b";
 }
 
-function channelIcon(ch) {
-  const m = { ig: "📸", instagram: "📸", email: "✉️", gmail: "✉️", linkedin: "💼", twitter: "🐦", sms: "💬" };
-  return m[(ch || "").toLowerCase()] || "💬";
-}
-
 // C7: canonical IG profile URL from a handle
 function igProfileUrl(handle) {
   return handle ? `https://www.instagram.com/${String(handle).replace(/^@/, "")}/` : null;
@@ -142,15 +152,15 @@ document.querySelectorAll(".tab").forEach((btn) => {
 });
 
 function renderActiveTab() {
-  if (activeTab === "notifs") renderNotifications();
-  else if (activeTab === "leads") renderLeads();
-  else if (activeTab === "outreach") renderOutreach();
+  if (activeTab === "followups") renderFollowups();
   else if (activeTab === "scripts") renderScripts();
+  else if (activeTab === "links") renderLinks();
+  else renderOutreach();
 }
 
-// ── Notifications tab ─────────────────────────────────────────────────────────
+// ── Follow-ups tab — overdue follow-ups only (replies stay as Chrome notifications) ──
 
-function renderNotifications() {
+function renderFollowups() {
   const list = document.getElementById("notifList");
   const items = [];
 
@@ -171,29 +181,12 @@ function renderNotifications() {
     `);
   }
 
-  // Reply notifications
-  for (const n of notifications) {
-    items.push(`
-      <div class="notif-row notif-reply">
-        <div class="notif-icon-wrap">${channelIcon(n.channel)}</div>
-        <div class="notif-body">
-          <div class="notif-name">${esc(n.leadName)}${n.leadHandle && n.leadHandle !== n.leadName ? ` <span class="notif-handle">@${esc(n.leadHandle)}</span>` : ""}</div>
-          ${n.summary ? `<div class="notif-msg">${esc(n.summary)}</div>` : ""}
-          <div class="notif-sub">${channelIcon(n.channel)} ${esc(n.channel)} · ${relTime(n.ts)}</div>
-        </div>
-        <div class="notif-actions">
-          <button class="notif-btn stage-replied-btn" data-id="${esc(n.leadId)}">Replied</button>
-        </div>
-      </div>
-    `);
-  }
-
   if (!items.length) {
     list.innerHTML = `
       <div class="empty-state">
-        <div class="empty-icon">🎯</div>
-        <p>All clear!</p>
-        <span>Replies from Gmail, LinkedIn, and Twitter appear here automatically.</span>
+        <div class="empty-icon">🚀</div>
+        <p>Nothing due yet</p>
+        <span>Follow-ups show up here once leads are in motion. Right now, focus on new volume in Outreach.</span>
       </div>`;
     return;
   }
@@ -202,156 +195,6 @@ function renderNotifications() {
 
   list.querySelectorAll(".open-btn").forEach((btn) => {
     btn.addEventListener("click", () => openInIgTab(btn.dataset.url));
-  });
-
-  list.querySelectorAll(".stage-replied-btn").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      btn.textContent = "✓";
-      btn.disabled = true;
-      await chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: btn.dataset.id, updates: { stage: "Replied" } });
-      await loadData();
-    });
-  });
-}
-
-// ── Pipeline / Leads tab ──────────────────────────────────────────────────────
-
-function renderLeads() {
-  // Stats chips
-  const statsRow = document.getElementById("statsRow");
-  const fuCount = allLeads.filter(needsFU).length;
-  const repliedCount = allLeads.filter((l) => l.stage === "Replied").length;
-  const bookedCount = allLeads.filter((l) => ["Booked", "Active"].includes(l.stage)).length;
-
-  statsRow.innerHTML = [
-    fuCount > 0 ? `<button class="stat-chip chip-red ${activeFilter === "needs_fu" ? "chip-active" : ""}" data-filter="needs_fu">${fuCount} Needs FU</button>` : "",
-    repliedCount > 0 ? `<button class="stat-chip chip-purple ${activeFilter === "replied" ? "chip-active" : ""}" data-filter="replied">${repliedCount} Replied</button>` : "",
-    bookedCount > 0 ? `<button class="stat-chip chip-green ${activeFilter === "booked" ? "chip-active" : ""}" data-filter="booked">${bookedCount} Booked</button>` : "",
-  ].filter(Boolean).join("");
-
-  statsRow.querySelectorAll(".stat-chip").forEach((chip) => {
-    chip.addEventListener("click", () => {
-      activeFilter = activeFilter === chip.dataset.filter ? "all" : chip.dataset.filter;
-      document.querySelectorAll(".filter").forEach((f) => f.classList.toggle("active", f.dataset.filter === activeFilter));
-      renderLeads();
-    });
-  });
-
-  // Filter leads
-  const visible = allLeads.filter((l) => {
-    switch (activeFilter) {
-      case "all":       return !["Closed", "DQ", "Churned"].includes(l.stage);
-      case "needs_fu":  return needsFU(l);
-      case "replied":   return l.stage === "Replied";
-      case "booked":    return ["Booked", "Active"].includes(l.stage);
-      case "new":       return ["New", "Warming"].includes(l.stage);
-      default:          return true;
-    }
-  });
-
-  const list = document.getElementById("leadList");
-
-  if (!visible.length) {
-    list.innerHTML = `<div class="empty-state"><p>No leads in this view.</p></div>`;
-    return;
-  }
-
-  list.innerHTML = visible.map((lead) => {
-    const cache = lead.research_cache || {};
-    const score = typeof cache.fitScore === "number" ? cache.fitScore : null;
-    const opener = typeof cache.suggestedOpener === "string" ? cache.suggestedOpener : null;
-    const stack = Array.isArray(cache.stackDetected) ? cache.stackDetected : [];
-    const url = igUrl(lead);
-    const u = urgency(lead);
-    const isUrgent = u === "overdue" || u === "today";
-    const handle = lead.ig_username || "";
-
-    return `
-      <div class="lead-item ${isUrgent ? "lead-urgent" : ""}">
-        <div class="lead-header">
-          <div class="lead-name">
-            ${handle ? `<a class="handle-link" href="${esc(igProfileUrl(handle))}" target="_blank" rel="noreferrer">${esc(displayName(lead))}</a>` : esc(displayName(lead))}
-            ${handle ? `<button class="copy-handle-btn" data-handle="${esc(handle)}" title="Copy @${esc(handle)}">⧉</button>` : ""}
-            ${score !== null ? `<span class="score-badge" style="color:${scoreColor(score)}">${score}</span>` : ""}
-            ${lead.research_status === "pending" ? '<span class="pulse-dot"></span>' : ""}
-          </div>
-          <span class="stage-tag" style="background:${stageColor(lead.stage)}22;color:${stageColor(lead.stage)};border-color:${stageColor(lead.stage)}44">${esc(lead.stage)}</span>
-        </div>
-
-        ${lead.due_at ? `<div class="lead-due ${isUrgent ? "due-urgent" : ""}">${esc(dueLabel(lead.due_at))}</div>` : ""}
-
-        ${stack.length ? `<div class="stack-pills">${stack.slice(0, 3).map((s) => `<span class="stack-pill">${esc(s)}</span>`).join("")}</div>` : ""}
-
-        ${opener ? `
-          <div class="opener-preview">
-            <span class="opener-label">Opener</span>
-            <p>${esc(opener.slice(0, 90))}${opener.length > 90 ? "…" : ""}</p>
-          </div>
-        ` : ""}
-
-        <div class="lead-footer">
-          ${url ? `<button class="btn-sm btn-pink open-ig-btn" data-url="${esc(url)}" data-opener="${encodeURIComponent(opener || "")}">📸 Open${opener ? " + Copy" : ""}</button>` : ""}
-          <button class="btn-sm view-profile-btn" style="background:none;border:1px solid #1e1e2a;color:#475569;font-size:10px" data-lead-id="${esc(lead.id)}">View →</button>
-          <div class="quick-stages">
-            <select class="stage-select" data-id="${esc(lead.id)}" style="color:${stageColor(lead.stage)};border-color:${stageColor(lead.stage)}44">
-              ${ALL_STAGES.map((s) => `<option value="${s}" ${lead.stage === s ? "selected" : ""}>${s}</option>`).join("")}
-            </select>
-          </div>
-        </div>
-      </div>
-    `;
-  }).join("");
-
-  list.querySelectorAll(".open-ig-btn").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const opener = decodeURIComponent(btn.dataset.opener || "");
-      if (opener) navigator.clipboard.writeText(opener).catch(() => {});
-      openInIgTab(btn.dataset.url);
-    });
-  });
-
-  list.querySelectorAll(".view-profile-btn").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      chrome.tabs.create({ url: `${dashboardUrl}/leads/${btn.dataset.leadId}` });
-    });
-  });
-
-  list.querySelectorAll(".stage-select").forEach((sel) => {
-    sel.addEventListener("click", (e) => e.stopPropagation());
-    sel.addEventListener("change", async (e) => {
-      e.stopPropagation();
-      sel.disabled = true;
-      await apiPatchLead(sel.dataset.id, { stage: sel.value });
-      await loadData();
-    });
-  });
-
-  list.querySelectorAll(".copy-handle-btn").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      navigator.clipboard.writeText(`@${btn.dataset.handle}`).catch(() => {});
-      btn.textContent = "✓";
-      setTimeout(() => (btn.textContent = "⧉"), 1200);
-    });
-  });
-
-  // Clicking a lead row opens that profile in the active IG tab and switches to Outreach
-  list.querySelectorAll(".lead-item").forEach((item) => {
-    item.addEventListener("click", (e) => {
-      // Don't fire if user clicked a button/link/control inside the row
-      if (e.target.closest("button, a, select, textarea, input")) return;
-      const leadId = item.querySelector(".view-profile-btn")?.dataset.leadId;
-      if (!leadId) return;
-      const target = allLeads.find(l => l.id === leadId);
-      if (!target) return;
-      const url = target.ig_profile_url || (target.ig_username ? `https://www.instagram.com/${target.ig_username}/` : null);
-      if (url) openInIgTab(url);
-      // Switch to outreach tab
-      const outreachTab = document.querySelector('.tab[data-tab="outreach"]');
-      if (outreachTab) outreachTab.click();
-    });
   });
 }
 
@@ -531,7 +374,7 @@ async function loadAeState() {
   let aeId = null;
   if (aes.length) {
     const stored = (await chrome.storage.sync.get("selectedAeId").catch(() => ({}))).selectedAeId;
-    aeId = aes.some(a => a.id === stored) ? stored : aes[0].id;
+    aeId = (stored === "" || aes.some(a => a.id === stored)) ? stored : aes[0].id;
   }
   return { aes, aeId };
 }
@@ -541,20 +384,19 @@ async function loadAeState() {
 function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, initialError, mode) {
   mode = mode || "book";
   const offering = mode === "avail";
-  slotMins = slotMins || 30;
+  slotMins = slotMins || 45;
   aes = aes || [];
   let currentAeId = aeId || null;
   const leadName = lead?.name || (lead?.ig_username ? `@${lead.ig_username}` : "Lead");
   const aeName = () => aes.find(a => a.id === currentAeId)?.name || null;
   const offerPicks = []; // availability mode: slots chosen to offer (max 3)
   let lateTimes = false; // calls normally end by 6:15 PM; override extends to 8 PM
+  let displayTz = "America/New_York";
+  let currentSlots = slots || [];   // raw flat list, for regrouping on zone change
 
-  // Group slots by LOCAL date key "YYYY-MM-DD" (the raw ISO string is UTC —
-  // splitting it puts evening slots under the wrong day for western reps).
-  function localKey(iso) {
-    const d = new Date(iso);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }
+  // Group slots by date key "YYYY-MM-DD" in the display zone (the raw ISO string
+  // is UTC — splitting it puts evening slots under the wrong day).
+  function localKey(iso) { return fbDayKey(iso, displayTz); }
   function groupSlots(list) {
     const m = {};
     (list || []).forEach(s => { const k = localKey(s.start); (m[k] = m[k] || []).push(s); });
@@ -584,21 +426,25 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
   if (!aeBar) {
     aeBar = document.createElement("div");
     aeBar.id = "sp-ae-bar";
+    aeBar.className = "sp-ae-bar";
     modal.insertBefore(aeBar, body);
   }
   function renderAeBar() {
     const aeSelect = aes.length ? `
       <span style="font-size:11px;color:#475569;flex-shrink:0">Call with</span>
-      <select id="sp-ae-select" aria-label="Account Executive for this call"
-        style="flex:1;padding:6px 8px;background:#151B2E;border:1px solid #2A3554;border-radius:8px;color:#E2E8F0;font-size:12px;font-weight:600;outline:none;cursor:pointer">
+      <select id="sp-ae-select" class="sp-ae-select" aria-label="Account Executive for this call">
+        <option value="" ${!currentAeId ? "selected" : ""}>Me (my calendar)</option>
         ${aes.map(a => `<option value="${a.id}" ${a.id === currentAeId ? "selected" : ""}>${esc(a.name)}</option>`).join("")}
       </select>` : "";
-    aeBar.style.cssText = "display:flex;align-items:center;gap:8px;padding:10px 18px 0;flex-wrap:wrap";
     aeBar.innerHTML = `${aeSelect}
-      <button id="sp-late-toggle" title="Calls normally end by 6:15 PM — allow up to 8 PM"
-        style="flex-shrink:0;padding:5px 9px;border-radius:8px;font-size:10.5px;font-weight:600;cursor:pointer;background:${lateTimes ? "#2a1f38" : "#151B2E"};border:1px solid ${lateTimes ? "#7c3aed" : "#2A3554"};color:${lateTimes ? "#c4b5fd" : "#475569"}">🌙 Late</button>`;
+      <select id="sp-tz-select" class="sp-ae-select" style="flex:0 0 auto;min-width:52px" aria-label="Timezone">
+        ${FB_TZS.map(t => `<option value="${t.id}" ${t.id === displayTz ? "selected" : ""}>${t.label}</option>`).join("")}
+      </select>
+      <button id="sp-late-toggle" class="sp-late-toggle${lateTimes ? " on" : ""}"
+        title="Calls normally end by 6:15 PM — allow up to 8 PM">🌙 Late</button>`;
     const sel = document.getElementById("sp-ae-select");
     if (sel) sel.onchange = (e) => switchAe(e.target.value);
+    document.getElementById("sp-tz-select").onchange = (e) => applyTz(e.target.value);
     document.getElementById("sp-late-toggle").onclick = () => {
       lateTimes = !lateTimes;
       renderAeBar();
@@ -613,7 +459,8 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
     body.innerHTML = `<div style="padding:34px 0;text-align:center;color:#475569;font-size:12px">Checking ${esc(aeName() || "your")}${aeName() ? "’s" : ""} live availability…</div>`;
     const res = await chrome.runtime.sendMessage({ type: "GET_CALENDAR_SLOTS", aeId: currentAeId, late: lateTimes }).catch(() => null);
     if (res?.ok) {
-      slotsByDate = groupSlots(res.slots);
+      currentSlots = res.slots;
+      slotsByDate = groupSlots(currentSlots);
       availDates = new Set(Object.keys(slotsByDate));
       renderCalendar();
     } else if (res?.error === "ae_calendar_unreadable") {
@@ -625,8 +472,18 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
 
   async function switchAe(id) {
     currentAeId = id;
-    if (id) chrome.storage.sync.set({ selectedAeId: id }).catch(() => {});
+    chrome.storage.sync.set({ selectedAeId: id }).catch(() => {});
     await refetchSlots();
+  }
+
+  function applyTz(newTz) {
+    if (!FB_TZS.some(t => t.id === newTz)) return;
+    displayTz = newTz;
+    chrome.storage.sync.set({ fbDisplayTz: newTz }).catch(() => {});
+    slotsByDate = groupSlots(currentSlots);
+    availDates = new Set(Object.keys(slotsByDate));
+    renderAeBar();
+    renderCalendar();   // return to calendar; availDates now keyed in the new zone
   }
 
   function renderUnreadable() {
@@ -643,11 +500,7 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
   }
 
   function fmtTime(iso) {
-    const d = new Date(iso);
-    const h = d.getHours(), m = d.getMinutes();
-    const h12 = h % 12 || 12;
-    const ampm = h >= 12 ? "PM" : "AM";
-    return `${h12}${m === 0 ? "" : `:${String(m).padStart(2,"0")}`} ${ampm}`;
+    return fbFmtTime(iso, displayTz);
   }
 
   const today = new Date();
@@ -669,7 +522,7 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
   }
   function offerDmText() {
     const first = (lead?.name || "").trim().split(/\s+/)[0];
-    return `Hey${first ? ` ${first}` : ""} — happy to walk through the dashboard, no pitch, just ${slotMins} min to show you what it looks like with your numbers.\n\n${aeName() ? "We're" : "I'm"} open ${offerTimesText()} — any of those work?`;
+    return `Hey${first ? ` ${first}` : ""} — happy to walk through the dashboard, no pitch, just ${slotMins} min to show you what it looks like with your numbers.\n\n${aeName() ? "We're" : "I'm"} open ${offerTimesText()} ${fbTzLabel(displayTz)} — any of those work?`;
   }
   function offerFooterHtml() {
     if (!offering) return "";
@@ -695,7 +548,7 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
     const ct = document.getElementById("sp-copy-times");
     const cd = document.getElementById("sp-copy-offer-dm");
     if (ct) ct.addEventListener("click", async () => {
-      await navigator.clipboard.writeText(offerTimesText()).catch(() => {});
+      await navigator.clipboard.writeText(offerTimesText() + " " + fbTzLabel(displayTz)).catch(() => {});
       ct.textContent = "✓ Copied!"; ct.style.color = "#4ade80";
     });
     if (cd) cd.addEventListener("click", async () => {
@@ -755,13 +608,16 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
 
     body.innerHTML = `
       <button class="sp-back-btn" id="sp-slots-back">‹ Back</button>
-      <div style="font-size:13px;font-weight:700;color:#E2E8F0;margin-bottom:14px">${DAYS[dateObj.getDay()]}, ${MONTHS_SHORT[mo-1]} ${d}</div>
-      <div class="sp-slots-grid">
-        ${daySlots.map((s, i) => `<button class="sp-slot-btn${offering && isPicked(s) ? " selected" : ""}" data-i="${i}">${fmtTime(s.start)}</button>`).join("")}
+      <div class="sp-day-group">
+        <div class="sp-day-label" style="margin-bottom:12px">${DAYS[dateObj.getDay()]}, ${MONTHS_SHORT[mo-1]} ${d}</div>
+        <div class="sp-slots-chips">
+          ${daySlots.map((s, i) => `<button class="sp-slot-chip${offering && isPicked(s) ? " selected" : ""}" data-i="${i}">${fmtTime(s.start)}</button>`).join("")}
+        </div>
+        <div class="sp-tz-hint">Times in ${fbTzLabel(displayTz)}</div>
       </div>` + offerFooterHtml();
 
     document.getElementById("sp-slots-back").onclick = renderCalendar;
-    body.querySelectorAll(".sp-slot-btn").forEach(btn => {
+    body.querySelectorAll(".sp-slot-chip").forEach(btn => {
       btn.addEventListener("click", () => {
         const slot = daySlots[parseInt(btn.dataset.i)];
         if (offering) {
@@ -772,7 +628,7 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
           renderSlots(dateKey);
           return;
         }
-        body.querySelectorAll(".sp-slot-btn").forEach(b => b.classList.remove("selected"));
+        body.querySelectorAll(".sp-slot-chip").forEach(b => b.classList.remove("selected"));
         btn.classList.add("selected");
         setTimeout(() => renderConfirm(daySlots[parseInt(btn.dataset.i)], dateKey), 160);
       });
@@ -788,31 +644,48 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
     body.innerHTML = `
       <div class="sp-confirm-card">
         <div class="sp-confirm-row"><span>📅</span><span>${DAYS[dateObj.getDay()]}, ${MONTHS_SHORT[mo-1]} ${d}</span></div>
-        <div class="sp-confirm-row"><span>🕐</span><span>${fmtTime(slot.start)} · ${slotMins} min</span></div>
-        <div class="sp-confirm-row"><span>👤</span><span>${esc(leadName)}</span></div>
+        <div class="sp-confirm-row"><span>🕐</span><span>${fmtTime(slot.start)} ${fbTzLabel(displayTz)} · ${slotMins} min</span></div>
         ${aeName() ? `<div class="sp-confirm-row"><span>🎧</span><span>AE: ${esc(aeName())}</span></div>` : ""}
       </div>
-      <div style="margin-bottom:12px">
-        <input id="sp-conf-email" type="email" placeholder="Their email (optional — adds them as attendee)"
-          style="width:100%;padding:9px 12px;background:#0F1420;border:1px solid #2A3554;border-radius:8px;color:#CBD5E1;font-size:12px;outline:none;box-sizing:border-box;transition:border-color .15s">
-      </div>
+      <label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#475569;margin:0 0 4px">Booking for</label>
+      <input id="sp-conf-name" type="text" placeholder="Their name"
+        style="width:100%;padding:9px 12px;margin-bottom:8px;background:#0F1420;border:1px solid #2A3554;border-radius:8px;color:#CBD5E1;font-size:12px;outline:none;box-sizing:border-box;transition:border-color .15s">
+      <input id="sp-conf-email" type="email" placeholder="Their email (optional — adds them as attendee)"
+        style="width:100%;margin-bottom:12px;padding:9px 12px;background:#0F1420;border:1px solid #2A3554;border-radius:8px;color:#CBD5E1;font-size:12px;outline:none;box-sizing:border-box;transition:border-color .15s">
       <p class="sp-confirm-hint">Creates a Google Calendar event${aeName() ? `, invites ${esc(aeName())},` : ""} and marks this lead as Booked.</p>
       <button class="sp-confirm-btn" id="sp-conf-book">Confirm Booking</button>
       <button class="sp-back-btn" id="sp-conf-back" style="justify-content:center;margin-top:10px">‹ Change time</button>`;
 
-    document.getElementById("sp-conf-email").addEventListener("focus", function() { this.style.borderColor = "#3B82F6"; });
-    document.getElementById("sp-conf-email").addEventListener("blur", function() { this.style.borderColor = "#2A3554"; });
+    const nameEl = document.getElementById("sp-conf-name");
+    const emailEl = document.getElementById("sp-conf-email");
+    // Suggested from the lead, but fully editable — the booking is NOT locked to
+    // the profile you're viewing. A real suggestion is protected; a blank one
+    // auto-fills from the email as you type it (until you edit the name).
+    const suggestedName = lead?.name || lead?.ig_username || "";
+    nameEl.value = suggestedName;
+    if (suggestedName) nameEl.dataset.edited = "1";
+    nameEl.addEventListener("input", () => { nameEl.dataset.edited = "1"; });
+    emailEl.addEventListener("input", () => {
+      if (nameEl.dataset.edited) return;
+      const local = emailEl.value.split("@")[0] || "";
+      nameEl.value = local.split(/[._-]/).filter(Boolean).map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
+    });
+    [nameEl, emailEl].forEach((el) => {
+      el.addEventListener("focus", () => { el.style.borderColor = "#3B82F6"; });
+      el.addEventListener("blur", () => { el.style.borderColor = "#2A3554"; });
+    });
     document.getElementById("sp-conf-back").onclick = () => renderSlots(dateKey);
 
     document.getElementById("sp-conf-book").addEventListener("click", async () => {
       const btn = document.getElementById("sp-conf-book");
-      const guestEmail = document.getElementById("sp-conf-email").value.trim() || undefined;
+      const guestEmail = emailEl.value.trim() || undefined;
+      const bookedName = nameEl.value.trim() || lead?.name || lead?.ig_username || "Lead";
       btn.textContent = "Booking…";
       btn.disabled = true;
       const result = await chrome.runtime.sendMessage({
         type: "CREATE_CALENDAR_EVENT",
         slotStart: slot.start, slotEnd: slot.end,
-        leadName: lead?.name || lead?.ig_username || "Lead",
+        leadName: bookedName,
         guestEmail,
         aeId: currentAeId || undefined,
       }).catch(() => null);
@@ -827,12 +700,12 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
         await chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "Booked" } }).catch(() => {});
         const [y2, mo2, d2] = dateKey.split("-").map(Number);
         const d2Obj = new Date(y2, mo2-1, d2);
-        const dmText = `Hey! Just sent a calendar invite for ${DAYS[d2Obj.getDay()]} ${MONTHS_SHORT[mo2-1]} ${d2} at ${fmtTime(slot.start)} — ${slotMins} min, no pressure. Let me know if that time works!`;
+        const dmText = `Hey! Just sent a calendar invite for ${DAYS[d2Obj.getDay()]} ${MONTHS_SHORT[mo2-1]} ${d2} at ${fmtTime(slot.start)} ${fbTzLabel(displayTz)} — ${slotMins} min, no pressure. Let me know if that time works!${result?.meetLink ? `\n\nGoogle Meet: ${result.meetLink}` : ""}`;
         body.innerHTML = `
           <div class="sp-book-done">
             <div class="sp-book-done-icon">✓</div>
             <p>Call booked!</p>
-            <span>${esc(leadName)} · ${fmtTime(slot.start)}</span>
+            <span>${esc(bookedName)} · ${fmtTime(slot.start)}</span>
             <button id="sp-copy-dm" style="margin-top:8px;padding:8px 18px;background:#1A2235;border:1px solid #2A3554;border-radius:8px;color:#94A3B8;font-size:12px;cursor:pointer;transition:all .15s">Copy DM text</button>
           </div>`;
         document.getElementById("sp-copy-dm").addEventListener("click", async function() {
@@ -853,6 +726,16 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
   if (initialError === "ae_calendar_unreadable") renderUnreadable();
   else renderCalendar();
   overlay.style.display = "flex";
+  chrome.storage.sync.get({ fbDisplayTz: "America/New_York" }).then(r => {
+    if (!r.fbDisplayTz || r.fbDisplayTz === displayTz || !FB_TZS.some(t => t.id === r.fbDisplayTz)) return;
+    if (initialError === "ae_calendar_unreadable") {
+      // Don't clobber the error screen — just adopt the zone for later refetches.
+      displayTz = r.fbDisplayTz;
+      renderAeBar();
+    } else {
+      applyTz(r.fbDisplayTz);
+    }
+  }).catch(() => {});
 }
 
 function renderOutreach() {
@@ -887,7 +770,15 @@ function renderOutreach() {
   });
 
   if (!queue.length) {
-    list.innerHTML = `<div class="empty-state"><div class="empty-icon">🎉</div><p>Queue cleared!</p><span>All leads done or snoozed.</span></div>`;
+    list.innerHTML = `
+      <div class="empty-state"><div class="empty-icon">🎉</div><p>Queue cleared!</p><span>All leads done or snoozed.</span></div>
+      <div style="display:flex;justify-content:center;padding:6px 0">
+        <a href="#" id="allLeadsLink" style="font-size:11px;color:#475569;text-decoration:none">All leads →</a>
+      </div>`;
+    document.getElementById("allLeadsLink")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      chrome.tabs.create({ url: `${dashboardUrl}/` });
+    });
     return;
   }
 
@@ -1047,7 +938,22 @@ function renderOutreach() {
         <button class="nav-btn" id="nextBtn" ${outreachIdx >= queue.length - 1 ? "disabled" : ""}>Next →</button>
       </div>
     </div>
+
+    <div style="display:flex;gap:14px;justify-content:center;padding:8px 0 4px">
+      <a href="#" id="allLeadsLink" style="font-size:11px;color:#475569;text-decoration:none">All leads →</a>
+      <a href="#" id="openDashLeadLink" style="font-size:11px;color:#475569;text-decoration:none">Open in dashboard →</a>
+    </div>
   `;
+
+  // Quick links to the dashboard (the panel's Leads tab was cut — full list lives there)
+  document.getElementById("allLeadsLink")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    chrome.tabs.create({ url: `${dashboardUrl}/` });
+  });
+  document.getElementById("openDashLeadLink")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    chrome.tabs.create({ url: `${dashboardUrl}/leads/${lead.id}` });
+  });
 
   // Copy @handle
   const copyHandleBtn = document.getElementById("copyHandleBtn");
@@ -1254,7 +1160,7 @@ function renderOutreach() {
         // Open the picker anyway — the AE dropdown lets the rep switch to one
         // whose calendar IS visible.
         const outreachCard = btn.closest(".outreach-card") || btn.parentElement;
-        showSidepanelSlotPicker(outreachCard, lead, [], slotResult.slotMins || 30, aeState.aes, aeState.aeId, "ae_calendar_unreadable", mode);
+        showSidepanelSlotPicker(outreachCard, lead, [], slotResult.slotMins || 45, aeState.aes, aeState.aeId, "ae_calendar_unreadable", mode);
       } else if (slotResult?.needsCalendar || slotResult?.needsSignIn) {
         btn.dataset.connect = "1";
         btn.textContent = "🔗 Connect calendar";
@@ -1308,6 +1214,60 @@ function renderOutreach() {
 const catSelect = document.getElementById("scriptCategory");
 const scriptListEl = document.getElementById("scriptList");
 
+const DEFAULT_LINKS = [
+  { label: "Salesforce", url: "https://saas-data-1186.lightning.force.com/lightning/page/home" },
+  { label: "BNPL", url: "https://www.fanbasis.com/bnpl" },
+  { label: "Seller Signup", url: "https://www.fanbasis.com/seller" },
+  { label: "Enterprises", url: "https://www.fanbasis.com/enterprises" },
+  { label: "VIP Deposit", url: "https://webinarcon.com/vip-deposit/" },
+];
+
+// Quicklinks tab: admin/team defaults (seeded above) + per-rep links saved to
+// chrome.storage.sync. Team-managed defaults from the dashboard come with the
+// server deploy; this is the client-side, works-offline version.
+function renderLinks() {
+  const el = document.getElementById("linksList");
+  if (!el) return;
+  chrome.storage.sync.get({ fbUserLinks: [] }, ({ fbUserLinks }) => {
+    const userLinks = Array.isArray(fbUserLinks) ? fbUserLinks : [];
+    const row = (l, removable, i) => `
+      <div class="ql-row">
+        <a class="ql-link" data-url="${esc(l.url)}" href="${esc(l.url)}">
+          <span class="ql-label">${esc(l.label)}</span>
+          <span class="ql-url">${esc(l.url.replace(/^https?:\/\//, ""))}</span>
+        </a>
+        ${removable ? `<button class="ql-del" data-i="${i}" title="Remove">✕</button>` : ""}
+      </div>`;
+    el.innerHTML =
+      `<div class="ql-section-label">Team links</div>` +
+      DEFAULT_LINKS.map((l) => row(l, false)).join("") +
+      (userLinks.length ? `<div class="ql-section-label">My links</div>` + userLinks.map((l, i) => row(l, true, i)).join("") : "") +
+      `<div class="ql-add">
+        <input id="ql-label" placeholder="Label" />
+        <input id="ql-url" placeholder="paste a link…" />
+        <button id="ql-add-btn">Add</button>
+      </div>`;
+    el.querySelectorAll(".ql-link").forEach((a) =>
+      a.addEventListener("click", (e) => { e.preventDefault(); chrome.tabs.create({ url: a.dataset.url }); })
+    );
+    el.querySelectorAll(".ql-del").forEach((b) =>
+      b.addEventListener("click", () => {
+        const next = userLinks.slice();
+        next.splice(parseInt(b.dataset.i, 10), 1);
+        chrome.storage.sync.set({ fbUserLinks: next }, renderLinks);
+      })
+    );
+    document.getElementById("ql-add-btn").addEventListener("click", () => {
+      const label = document.getElementById("ql-label").value.trim();
+      let url = document.getElementById("ql-url").value.trim();
+      if (!url) return;
+      if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+      const next = [...userLinks, { label: label || url.replace(/^https?:\/\//, ""), url }];
+      chrome.storage.sync.set({ fbUserLinks: next }, renderLinks);
+    });
+  });
+}
+
 function renderScripts() {
   if (!catSelect.options.length) {
     Object.keys(SCRIPTS).forEach((cat) => {
@@ -1336,45 +1296,6 @@ function renderScripts() {
 }
 catSelect.addEventListener("change", renderScripts);
 
-// ── Filter pills ──────────────────────────────────────────────────────────────
-
-document.querySelectorAll(".filter").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".filter").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    activeFilter = btn.dataset.filter;
-    renderLeads();
-  });
-});
-
-// ── Quick add lead ────────────────────────────────────────────────────────────
-
-document.getElementById("trackBtn").addEventListener("click", async () => {
-  const nameInput = document.getElementById("trackName");
-  const source = document.getElementById("trackSource").value;
-  const raw = nameInput.value.trim();
-  if (!raw) return;
-
-  const igUsername = source === "IG" && raw.startsWith("@") ? raw.slice(1) : undefined;
-
-  await fetch(`${dashboardUrl}/api/leads`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...repAuthHeader() },
-    body: JSON.stringify({
-      name: raw.replace("@", ""),
-      ig_username: igUsername || undefined,
-      source,
-      stage: "New",
-      mode: "sales",
-      ig_events: [],
-      tags: [],
-    }),
-  }).catch(() => {});
-
-  nameInput.value = "";
-  await loadData();
-});
-
 // ── Load data ─────────────────────────────────────────────────────────────────
 
 async function loadData() {
@@ -1402,11 +1323,12 @@ async function loadData() {
     return (order[urgency(a)] ?? 5) - (order[urgency(b)] ?? 5);
   });
 
-  notifications = notifsResp?.notifications ?? [];
+  // Reply notifications still fire as Chrome notifications from background.js —
+  // the panel only tracks overdue follow-ups now.
   overdueLeads = notifsResp?.overdue ?? [];
 
-  // Update inbox badge
-  const total = notifications.length + overdueLeads.length;
+  // Update follow-ups badge (overdue only)
+  const total = overdueLeads.length;
   const badge = document.getElementById("inboxBadge");
   badge.textContent = total;
   badge.style.display = total > 0 ? "inline" : "none";
@@ -1447,12 +1369,12 @@ function renderAuth(settings) {
   const row = "display:flex;align-items:center;gap:7px;font-size:11.5px;color:#cbd5e1;padding:4px 0";
   statusEl.innerHTML = `
     <div style="${row}">${dot("#22c55e")} Signed in as ${esc(rep.name || rep.email || "rep")}
-      <button id="signOutBtn" style="margin-left:auto;background:#161616;border:1px solid #2a2a35;border-radius:6px;color:#666;font-size:10px;padding:3px 9px;cursor:pointer">Sign out</button>
+      <button id="signOutBtn" class="sp-btn" style="margin-left:auto">Sign out</button>
     </div>
     <div style="${row}">${settings.calendarConnected
       ? `${dot("#22c55e")} Calendar connected`
       : `${dot("#f59e0b")} <span style="color:#fbbf24">Calendar not connected</span>
-         <button id="calReconnectBtn" style="margin-left:auto;background:#0f2540;border:1px solid #1d4ed8;border-radius:6px;color:#93c5fd;font-size:10px;padding:3px 9px;cursor:pointer">Connect</button>`}
+         <button id="calReconnectBtn" class="sp-btn sp-btn-primary" style="margin-left:auto">Connect</button>`}
     </div>
     <div style="${row}">${dot("#22c55e")} Team: FanBasis${settings.fanbasisHandle ? ` <span style="color:#5c5c78">(@${esc(settings.fanbasisHandle)})</span>` : ""}</div>`;
 

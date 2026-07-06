@@ -45,35 +45,48 @@ body { background: #070B12; color: #E2E8F0; font-family: -apple-system,'Inter',s
 
 /* ── Booking modal overlay ── */
 #sp-book-overlay { position: fixed; inset: 0; z-index: 999; background: rgba(3,7,18,0.88); backdrop-filter: blur(6px); display: flex; align-items: flex-end; justify-content: center; }
-#sp-book-modal { width: 100%; background: #0F1420; border: 1px solid #2A3554; border-radius: 18px 18px 0 0; box-shadow: 0 -12px 48px rgba(0,0,0,0.7); max-height: 92vh; overflow-y: auto; }
+#sp-book-modal { width: 100%; background: #0F1420; border: 1px solid #2A3554; border-radius: 18px 18px 0 0; box-shadow: 0 -12px 48px rgba(0,0,0,0.7); max-height: 92vh; display: flex; flex-direction: column; overflow: hidden; }
+.sp-book-header, .sp-book-steps { flex-shrink: 0; }
 .sp-book-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 0; }
 .sp-book-title { font-size: 14px; font-weight: 700; color: #E2E8F0; }
 .sp-book-subtitle { font-size: 11px; color: #475569; margin-top: 1px; }
 .sp-book-close { width: 28px; height: 28px; border-radius: 8px; background: #1A2235; border: none; color: #475569; cursor: pointer; font-size: 13px; transition: color 0.15s; }
 .sp-book-close:hover { color: #94A3B8; }
-.sp-book-steps { display: flex; gap: 4px; padding: 12px 16px 0; }
-.sp-book-step { height: 2px; flex: 1; border-radius: 99px; background: #1A2235; transition: background 0.3s; }
-.sp-book-step.active { background: #FF3A69; }
-.sp-book-body { padding: 16px; }
+.sp-book-steps { display: flex; gap: 10px; padding: 14px 16px 2px; }
+.sp-book-step { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.sp-book-step::before { content: ""; height: 3px; border-radius: 99px; background: #1A2235; transition: background .3s; }
+.sp-book-step.active::before { background: #FF3A69; }
+.sp-step-label { font: 600 9.5px/1 ui-monospace,Menlo,monospace; letter-spacing: .08em; text-transform: uppercase; color: #4A5878; }
+.sp-book-step.active .sp-step-label { color: #C6D2E8; }
+.sp-ae-bar { display: flex; align-items: center; gap: 8px; padding: 10px 16px 0; flex-wrap: wrap; }
+.sp-ae-select { flex: 1; min-width: 120px; background: #151B2E; border: 1px solid #2A3554; border-radius: 8px; color: #E2E8F0; font-size: 12px; font-weight: 600; padding: 6px 8px; outline: none; cursor: pointer; }
+.sp-ae-select:focus { border-color: #3B82F6; }
+.sp-late-toggle { flex-shrink: 0; padding: 6px 10px; border-radius: 8px; font-size: 10.5px; font-weight: 600; cursor: pointer; background: #151B2E; border: 1px solid #2A3554; color: #5A6274; transition: all .13s; }
+.sp-late-toggle:hover { color: #94A3B8; }
+.sp-late-toggle.on { background: #241a38; border-color: #7c3aed; color: #c4b5fd; }
+.sp-book-body { padding: 16px; flex: 1; overflow-y: auto; }
 
 /* calendar */
 .sp-cal-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .sp-cal-nav button { width: 28px; height: 28px; background: #151B2E; border: none; border-radius: 7px; color: #94A3B8; cursor: pointer; font-size: 14px; transition: color 0.12s; }
 .sp-cal-nav button:hover { color: #E2E8F0; }
 .sp-cal-month { font-size: 13px; font-weight: 700; color: #E2E8F0; }
-.sp-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; }
-.sp-cal-day-hdr { text-align: center; font-size: 10px; font-weight: 700; letter-spacing: 0.07em; color: #2D3A52; padding-bottom: 6px; }
-.sp-cal-day { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; margin: auto; font-size: 12px; font-weight: 500; color: #94A3B8; cursor: pointer; transition: all 0.12s; border: none; background: none; }
+.sp-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.sp-cal-day-hdr { text-align: center; font-size: 10px; font-weight: 700; letter-spacing: 0.07em; color: #4A5878; padding-bottom: 8px; }
+.sp-cal-day { display: flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 50%; margin: auto; font-size: 12.5px; font-weight: 500; color: #CBD5E1; cursor: pointer; transition: all 0.12s; border: none; background: none; }
 .sp-cal-day:hover:not(.disabled):not(.selected) { background: #1A2235; }
-.sp-cal-day.today { color: #FF3A69; background: rgba(255,58,105,0.08); }
-.sp-cal-day.selected { background: #FF3A69; color: white; font-weight: 700; }
-.sp-cal-day.disabled { color: #2D3A52; cursor: not-allowed; }
+.sp-cal-day.today { color: #FF3A69; background: rgba(255,58,105,0.10); }
+.sp-cal-day.selected { background: #FF3A69; color: #fff; font-weight: 700; }
+.sp-cal-day.disabled { color: #313d57; cursor: not-allowed; }
 
 /* time slots */
-.sp-slots-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; max-height: 240px; overflow-y: auto; }
-.sp-slot-btn { padding: 9px; border-radius: 10px; font-size: 12px; font-weight: 600; background: #151B2E; border: 1px solid #1A2235; color: #94A3B8; cursor: pointer; transition: all 0.13s; }
-.sp-slot-btn:hover { border-color: #2A3554; color: #E2E8F0; }
-.sp-slot-btn.selected { background: #FF3A69; border-color: #FF3A69; color: white; }
+.sp-day-group { margin-bottom: 6px; }
+.sp-day-label { font: 700 11px/1 ui-monospace,Menlo,monospace; letter-spacing: .1em; text-transform: uppercase; color: #7C8AA8; margin: 4px 0 9px; }
+.sp-slots-chips { display: flex; flex-wrap: wrap; gap: 8px; max-height: 260px; overflow-y: auto; }
+.sp-slot-chip { font: 600 12.5px/1 ui-monospace,Menlo,monospace; padding: 9px 12px; border-radius: 10px; background: #151B2E; border: 1px solid #26314a; color: #C6D2E8; cursor: pointer; transition: background .13s, border-color .13s, color .13s; }
+.sp-slot-chip:hover { border-color: #3A4668; color: #E7ECF5; }
+.sp-slot-chip.selected { background: #FF3A69; border-color: #FF3A69; color: #fff; }
+.sp-tz-hint { font: 500 10.5px/1.4 ui-monospace,Menlo,monospace; color: #5A6274; margin-top: 12px; }
 .sp-back-btn { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #475569; background: none; border: none; cursor: pointer; margin-bottom: 12px; transition: color 0.12s; }
 .sp-back-btn:hover { color: #94A3B8; }
 

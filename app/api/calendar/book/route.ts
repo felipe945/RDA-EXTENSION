@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
       return Response.json({ ok: false, error: "slot_taken" }, { status: 409 });
     }
 
-    const { eventId, htmlLink } = await createCalendarEvent({
+    const { eventId, htmlLink, meetLink } = await createCalendarEvent({
       accessToken: access.accessToken,
       slotStart: parsed.data.slotStart,
       slotEnd: parsed.data.slotEnd,
@@ -105,14 +105,14 @@ export async function POST(req: NextRequest) {
       if (patched.error) {
         // Event exists but the lead didn't move — surface it, don't pretend.
         return Response.json(
-          { ok: true, eventId, htmlLink, leadError: getSupabaseErrorMessage(patched.error) },
+          { ok: true, eventId, htmlLink, meetLink, leadError: getSupabaseErrorMessage(patched.error) },
           { status: 200 }
         );
       }
       lead = patched.data;
     }
 
-    return Response.json({ ok: true, eventId, htmlLink, lead });
+    return Response.json({ ok: true, eventId, htmlLink, meetLink, lead });
   } catch (err) {
     if (err instanceof Error && (err.message === "create_event_401" || err.message === "freebusy_401")) {
       return Response.json({ ok: false, needsCalendar: true });

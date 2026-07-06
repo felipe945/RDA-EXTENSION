@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
 
   const params = req.nextUrl.searchParams;
   const days = Math.min(Math.max(Number(params.get("days")) || 7, 1), 14);
-  const slotMins = Math.min(Math.max(Number(params.get("slotMins")) || 30, 15), 120);
+  const slotMins = Math.min(Math.max(Number(params.get("slotMins")) || 45, 15), 120);
   const aeId = params.get("aeId");
   // Late-times override: calls normally end by 6:15 PM; late=1 extends to 8 PM.
   const afterHours = params.get("late") === "1";

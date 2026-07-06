@@ -16,7 +16,7 @@ type LoadState = "loading" | "ready" | "needsCalendar" | "aeUnreadable" | "error
 
 const AE_STORAGE_KEY = "fb-book-ae";
 
-const SLOT_MINS = 30;
+const SLOT_MINS = 45;
 const DAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 const DAYS_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];

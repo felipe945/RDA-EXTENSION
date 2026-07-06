@@ -79,7 +79,7 @@ async function getSettings() {
     fanbasisHandle: boot?.fanbasisHandle || sync.fanbasisHandle,
     personalIgUsername: boot?.rep?.personalIgUsername || sync.personalIgUsername,
     calendarUrl: sync.calendarUrl,
-    slotMins: boot?.calendar?.slotMins || 30,
+    slotMins: boot?.calendar?.slotMins || 45,
     rep: boot?.rep || null,
     calendarConnected: !!boot?.calendar?.connected,
   };
@@ -413,7 +413,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // Pass server error codes (slot_taken, ae_calendar_unreadable)
           // through so the pickers can react specifically.
           if (!resp.ok || !data?.ok) { sendResponse({ ok: false, error: data?.error || `book_${resp.status}` }); break; }
-          sendResponse({ ok: true, eventId: data.eventId, eventLink: data.htmlLink });
+          sendResponse({ ok: true, eventId: data.eventId, eventLink: data.htmlLink, meetLink: data.meetLink });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
         }
@@ -423,7 +423,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case "GET_CALENDAR_SLOTS": {
         try {
           if (!bearer.Authorization) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
-          const slotMins = settings.slotMins || 30;
+          const slotMins = settings.slotMins || 45;
           const ae = msg.aeId ? `&aeId=${msg.aeId}` : "";
           const late = msg.late ? "&late=1" : "";
           const resp = await fetch(`${dashboardUrl}/api/calendar/slots?days=14&slotMins=${slotMins}${ae}${late}`, { headers: bearer });

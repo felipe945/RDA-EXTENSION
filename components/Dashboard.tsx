@@ -15,6 +15,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { type LeadPlus } from "@/components/ig";
 import { ownerLabel as getOwnerLabel } from "@/components/OwnerControl";
 import { RepStatsPanel } from "@/components/RepStatsPanel";
+import InstallExtensionBanner from "@/components/InstallExtensionBanner";
 
 type UrgencyBucket = "overdue" | "today" | "upcoming" | "booked" | "archived";
 type SourceTab = "all" | "IG" | "Email" | "LinkedIn" | "Manual";
@@ -216,6 +217,8 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
 
   return (
     <div className="space-y-5">
+      <InstallExtensionBanner />
+
       {/* Research pending banner */}
       {pendingResearch.length > 0 && (
         <div className="flex items-center justify-between rounded-xl border px-4 py-3" style={{ background: '#0F1420', borderColor: '#1A2235' }}>

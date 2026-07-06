@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import Logo from "@/components/Logo";
 import { usePathname } from "next/navigation";
 import { useMode } from "@/components/ModeProvider";
 import { useSession, signIn, signOut } from "next-auth/react";
@@ -55,12 +56,9 @@ export default function Nav() {
 
       {/* Logo / Brand */}
       <div className="flex items-center gap-2.5 px-4 py-4 border-b" style={{ borderColor: '#1A2235' }}>
-        <div className="w-6 h-6 rounded-md flex-shrink-0 flex items-center justify-center text-[9px] font-extrabold tracking-tight text-white"
-          style={{ background: 'linear-gradient(135deg, #FF3A69, #C22450)' }} aria-hidden="true">
-          FB
-        </div>
+        <Logo size={26} />
         <span className="font-semibold text-sm tracking-tight" style={{ color: '#E2E8F0' }}>
-          FanBasis <span style={{ color: '#FF3A69' }}>Sales Ops</span>
+          FanMas
         </span>
       </div>
 

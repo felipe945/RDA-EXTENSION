@@ -9,8 +9,8 @@ import { ToastProvider } from "@/components/ui/toast";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "FanBasis Sales Ops",
-  description: "FanBasis outbound sales command center — leads, outreach, and booking",
+  title: "FanMas",
+  description: "FanMas — outbound sales command center for leads, outreach, and booking",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

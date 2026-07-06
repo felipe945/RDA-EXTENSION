@@ -7,7 +7,7 @@ import { supabaseServer } from "@/lib/supabase";
 import { refreshAccessToken } from "@/lib/auth";
 
 export const DEFAULT_TIMEZONE = "America/New_York";
-export const DEFAULT_SLOT_MINS = 30;
+export const DEFAULT_SLOT_MINS = 45;
 
 interface GoogleConfig {
   refresh_token?: string;
@@ -252,7 +252,7 @@ export async function createCalendarEvent(opts: {
   aeName?: string | null;
   aeEmail?: string | null;
   timezone: string;
-}): Promise<{ eventId: string; htmlLink: string }> {
+}): Promise<{ eventId: string; htmlLink: string; meetLink?: string }> {
   const displayLead = (opts.leadName || "Lead").split(" ").slice(0, 2).join(" ");
   // The call is with the AE when one is chosen; the rep only hosts the hold.
   const displayUser = (opts.aeName || opts.repName || "FanBasis").split(" ")[0];
@@ -266,14 +266,23 @@ export async function createCalendarEvent(opts: {
     end: { dateTime: opts.slotEnd, timeZone: opts.timezone },
     status: "tentative",
     description: opts.aeName
-      ? `Discovery call with ${opts.aeName}${opts.repName ? ` — booked by ${opts.repName}` : ""} via FanBasis Sales Ops`
-      : "Booking sent via FanBasis Sales Extension",
+      ? `Discovery call with ${opts.aeName}${opts.repName ? ` — booked by ${opts.repName}` : ""} via FanBasis`
+      : "Booking sent via FanBasis",
+    // Auto-generate a Google Meet link so the invite carries a "Join with
+    // Google Meet" button. conferenceDataVersion=1 on the request URL is
+    // required or Google silently drops this block.
+    conferenceData: {
+      createRequest: {
+        requestId: crypto.randomUUID(),
+        conferenceSolutionKey: { type: "hangoutsMeet" },
+      },
+    },
     ...(attendees.length ? { attendees } : {}),
   };
   const resp = await fetch(
     // Event lives on the rep's calendar; the AE + lead are attendees.
     // sendUpdates=all so both actually receive the invite email.
-    "https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all",
+    "https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all&conferenceDataVersion=1",
     {
       method: "POST",
       headers: { Authorization: `Bearer ${opts.accessToken}`, "Content-Type": "application/json" },
@@ -281,6 +290,6 @@ export async function createCalendarEvent(opts: {
     }
   );
   if (!resp.ok) throw new Error(`create_event_${resp.status}`);
-  const event = (await resp.json()) as { id: string; htmlLink: string };
-  return { eventId: event.id, htmlLink: event.htmlLink };
+  const event = (await resp.json()) as { id: string; htmlLink: string; hangoutLink?: string };
+  return { eventId: event.id, htmlLink: event.htmlLink, meetLink: event.hangoutLink };
 }

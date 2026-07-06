@@ -650,7 +650,8 @@
     topRow.style.cssText = "display:flex;align-items:center;justify-content:space-between";
     topRow.innerHTML = `
       <div style="display:flex;align-items:center;gap:6px">
-        <span style="font-weight:700;color:#FF3A69;font-size:11px;letter-spacing:1px">FANBASIS</span>
+        <svg width="15" height="15" viewBox="0 0 200 200" style="flex-shrink:0"><defs><clipPath id="Lc"><rect width="100" height="200"/></clipPath><clipPath id="Rc"><rect x="100" width="100" height="200"/></clipPath><mask id="Cc"><rect width="200" height="200" fill="#fff"/><g fill="#000"><circle cx="108" cy="87" r="16"/><path d="M100,98 C98,113 88,123 74,135 C94,135 110,121 114,103 C115,99 113,96 109,95 Z"/></g></mask></defs><g mask="url(#Cc)"><g clip-path="url(#Lc)" fill="#E94866"><polygon points="100,55 111.76,88.82 147.55,89.55 119.02,111.18 129.4,145.45 100,125 70.6,145.45 80.98,111.18 52.45,89.55 88.24,88.82"/></g><g clip-path="url(#Rc)" fill="#82B2F7"><polygon points="100,55 111.76,88.82 147.55,89.55 119.02,111.18 129.4,145.45 100,125 70.6,145.45 80.98,111.18 52.45,89.55 88.24,88.82"/></g></g></svg>
+        <span style="font-weight:700;color:#e2e4f0;font-size:11px;letter-spacing:.3px">FanMas</span>
         <span style="color:#333;font-size:12px">·</span>
         <span style="color:#666;font-size:11px">@${username}</span>
       </div>
@@ -1001,7 +1002,7 @@
 
   // ── Stage-aware script list ────────────────────────────────────────────────
 
-  function buildScriptList(lead, displayName, bio, aiOpener) {
+  function buildScriptList(lead, displayName, bio, aiOpener, channel) {
     const stage = lead?.stage || "New";
     const firstName = (displayName || "").split(/\s+/)[0] || null;
     const fn = firstName || "[Name]";
@@ -1015,7 +1016,11 @@
     let pool = [];
     if (typeof SCRIPTS !== "undefined") {
       if (["New", "Warming"].includes(stage)) {
-        pool = [...(SCRIPTS["IG — FanBasis Account"] || []), ...(SCRIPTS["IG — Personal Account"] || [])];
+        // Scope to the account you're actually sending from — Personal scripts
+        // name ClarityPay, which must never surface on the FanBasis account.
+        pool = channel === "ig_personal"
+          ? [...(SCRIPTS["IG — Personal Account"] || [])]
+          : [...(SCRIPTS["IG — FanBasis Account"] || [])];
       } else if (stage === "DM Sent") {
         pool = [...(SCRIPTS["Cross-Channel & Follow-Ups"] || []), ...(SCRIPTS["IG — FanBasis Account"] || [])];
       } else if (stage === "Replied") {
@@ -1055,24 +1060,32 @@
 
   // ── Calendar slot helpers ──────────────────────────────────────────────────
 
-  function calFormatSlot(isoStart) {
-    const d = new Date(isoStart);
-    const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const h = d.getHours(); const m = d.getMinutes();
-    const h12 = h % 12 || 12; const ampm = h >= 12 ? "pm" : "am";
-    const minStr = m === 0 ? "" : `:${String(m).padStart(2,"0")}`;
-    return `${days[d.getDay()]} ${months[d.getMonth()]} ${d.getDate()} · ${h12}${minStr}${ampm}`;
+  // Display-timezone options. The availability WINDOW stays Eastern; this only
+  // controls which zone the rep views/offers times in, clearly labeled.
+  const FB_TZS = [
+    { id: "America/New_York", label: "ET" },
+    { id: "America/Chicago",  label: "CT" },
+    { id: "America/Denver",   label: "MT" },
+    { id: "America/Los_Angeles", label: "PT" },
+  ];
+  function fbTzLabel(id) { return (FB_TZS.find(t => t.id === id) || FB_TZS[0]).label; }
+  function fbFmtTime(iso, tz) {
+    const p = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true }).formatToParts(new Date(iso));
+    const g = t => p.find(x => x.type === t)?.value || "";
+    const m = g("minute");
+    return `${m === "00" ? g("hour") : `${g("hour")}:${m}`} ${g("dayPeriod")}`;
   }
+  function fbFmtDay(iso, tz) { return new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", month: "short", day: "numeric" }).format(new Date(iso)); }
+  function fbDayKey(iso, tz) { return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso)); }
 
-  function calFormatSlotsForDm(isoStarts) {
+  // Zone loaded/picked this page-load. Seeds displayTz synchronously on picker
+  // rebuilds so the async storage read only ever triggers one rebuild.
+  let fbTzMem = null;
+
+  function calFormatSlotsForDm(isoStarts, tz) {
     function fmtShort(iso) {
-      const dt = new Date(iso);
-      const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-      const h = dt.getHours(); const m = dt.getMinutes();
-      const h12 = h % 12 || 12; const ampm = h >= 12 ? "pm" : "am";
-      const minStr = m === 0 ? "" : `:${String(m).padStart(2,"0")}`;
-      return `${days[dt.getDay()]} at ${h12}${minStr}${ampm}`;
+      const wd = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(new Date(iso));
+      return `${wd} at ${fbFmtTime(iso, tz)}`;
     }
     if (!isoStarts.length) return "";
     const texts = isoStarts.map(fmtShort);
@@ -1080,6 +1093,30 @@
     if (texts.length === 2) return `${texts[0]} or ${texts[1]}`;
     const last = texts.pop();
     return texts.join(", ") + ", or " + last;
+  }
+
+  function ensureSlotPickerStyles() {
+    if (document.getElementById("fb-slot-picker-styles")) return;
+    const st = document.createElement("style");
+    st.id = "fb-slot-picker-styles";
+    st.textContent = `
+      .fbp-day{font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;color:#7c8aa8;margin:12px 0 8px;display:flex;align-items:center;gap:8px}
+      .fbp-day:first-child{margin-top:2px}
+      .fbp-day::after{content:"";flex:1;height:1px;background:#1e2436}
+      .fbp-chips{display:flex;flex-wrap:wrap;gap:6px}
+      .fbp-chip{font:600 12px/1 ui-monospace,Menlo,monospace;padding:8px 11px;border-radius:9px;background:#151b2e;border:1px solid #26314a;color:#c6d2e8;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
+      .fbp-chip:hover{border-color:#3a4668;color:#e7ecf5}
+      .fbp-chip.sel{background:#FF3A69;border-color:#FF3A69;color:#fff}
+      .fbp-status{font:500 10.5px/1.4 ui-monospace,Menlo,monospace;color:#5a6274;margin:12px 0 10px;text-align:center}
+      .fbp-empty{text-align:center;padding:20px 8px;color:#7c8aa8}
+      .fbp-empty .big{display:block;font-size:13px;font-weight:700;color:#c6d2e8;margin-bottom:4px}
+      .fbp-btn{border-radius:8px;font:600 12px/1 -apple-system,BlinkMacSystemFont,sans-serif;padding:9px;cursor:pointer;transition:filter .12s,border-color .12s,color .12s}
+      .fbp-btn-quiet{flex:1;background:transparent;border:1px solid #2a3350;color:#9aa7bd}
+      .fbp-btn-quiet:hover{border-color:#3a4668;color:#c6d2e8}
+      .fbp-btn-primary{flex:2;background:#FF3A69;border:1px solid #FF3A69;color:#fff}
+      .fbp-btn-primary:hover{filter:brightness(1.08)}
+    `;
+    (document.head || document.documentElement).appendChild(st);
   }
 
   // ── Slot picker (Google Calendar integration) ──────────────────────────────
@@ -1091,7 +1128,7 @@
     let aeId = null;
     if (aes.length) {
       const stored = (await chrome.storage.sync.get("selectedAeId").catch(() => ({}))).selectedAeId;
-      aeId = aes.some(a => a.id === stored) ? stored : aes[0].id;
+      aeId = (stored === "" || aes.some(a => a.id === stored)) ? stored : aes[0].id;
     }
     return { aes, aeId };
   }
@@ -1100,8 +1137,10 @@
   // ONE confirmed time and create the event. Same list, different job.
   function showSlotPicker(card, b, username, lead, dashboardUrl, slots, slotMins, aes, aeId, notice, mode, late) {
     mode = mode || "avail";
+    ensureSlotPickerStyles();
     const booking = mode === "book";
     const lateOn = !!late; // calls normally end by 6:15 PM; 🌙 extends to 8 PM
+    let displayTz = FB_TZS.some(t => t.id === fbTzMem) ? fbTzMem : "America/New_York";
     b.style.display = "none";
     slotMins = slotMins || 45;
     aes = aes || [];
@@ -1125,9 +1164,10 @@
     // The slots API no longer caps at 5 (that cap made the dashboard calendar
     // look booked solid) — two weeks can be 100+ open slots. Keep this quick
     // picker short: up to 2 per day spread across the window, max 10 rows.
+    const slotsRaw = slots; // unspread list — zone-change rebuilds regroup from this
     const byDay = {};
     (slots || []).forEach(s => {
-      const key = new Date(s.start).toDateString();
+      const key = fbDayKey(s.start, displayTz);
       (byDay[key] = byDay[key] || []).push(s);
     });
     slots = Object.values(byDay)
@@ -1137,6 +1177,18 @@
     const picker = document.createElement("div");
     picker.style.cssText = "padding:12px 14px";
 
+    // Saved display zone (shared with the side panel via fbDisplayTz). fbTzMem
+    // catches up first, so the rebuilt picker renders with the saved zone and
+    // this read becomes a no-op on the second pass.
+    chrome.storage.sync.get({ fbDisplayTz: "America/New_York" }).then(r => {
+      if (!FB_TZS.some(t => t.id === r.fbDisplayTz)) return;
+      fbTzMem = r.fbDisplayTz;
+      if (r.fbDisplayTz !== displayTz) {
+        picker.remove();
+        showSlotPicker(card, b, username, lead, dashboardUrl, slotsRaw, slotMins, aes, aeId, notice, mode, late);
+      }
+    }).catch(() => {});
+
     // Header
     const hdr = document.createElement("div");
     hdr.style.cssText = "display:flex;align-items:center;gap:6px;margin-bottom:10px";
@@ -1144,9 +1196,21 @@
     hdr.innerHTML = `
       <span style="width:7px;height:7px;border-radius:50%;background:#4285F4;display:inline-block;flex-shrink:0"></span>
       <span style="font-size:10px;font-weight:700;color:#93c5fd;letter-spacing:.04em">${slotMins}-min slots for <span style="color:#e2e8f0">${leadDisplayName}</span></span>
+      <select class="fb-tz-select" title="Show + offer times in this zone (window stays Eastern)"
+        style="margin-left:auto;flex:0 0 auto;background:#111118;border:1px solid #1e1e2e;border-radius:6px;color:#e2e8f0;font-size:11px;font-weight:600;padding:5px 6px;outline:none;cursor:pointer">
+        ${FB_TZS.map(t => `<option value="${t.id}" ${t.id === displayTz ? "selected" : ""}>${t.label}</option>`).join("")}
+      </select>
       <button class="fb-late-btn" title="Calls normally end by 6:15 PM — allow up to 8 PM"
-        style="margin-left:auto;flex-shrink:0;background:${lateOn ? "#2a1f38" : "#111118"};border:1px solid ${lateOn ? "#7c3aed" : "#1e1e2e"};border-radius:6px;color:${lateOn ? "#c4b5fd" : "#6e7280"};font-size:10px;font-weight:600;padding:3px 7px;cursor:pointer">🌙 Late</button>
+        style="flex-shrink:0;background:${lateOn ? "#2a1f38" : "#111118"};border:1px solid ${lateOn ? "#7c3aed" : "#1e1e2e"};border-radius:6px;color:${lateOn ? "#c4b5fd" : "#6e7280"};font-size:10px;font-weight:600;padding:3px 7px;cursor:pointer">🌙 Late</button>
     `;
+    hdr.querySelector(".fb-tz-select").addEventListener("change", (e) => {
+      const tzId = e.target.value;
+      if (!FB_TZS.some(t => t.id === tzId)) return;
+      fbTzMem = tzId;
+      chrome.storage.sync.set({ fbDisplayTz: tzId }).catch(() => {});
+      picker.remove();
+      showSlotPicker(card, b, username, lead, dashboardUrl, slotsRaw, slotMins, aes, currentAeId, notice, mode, lateOn);
+    });
     hdr.querySelector(".fb-late-btn").addEventListener("click", async (e) => {
       e.target.disabled = true;
       await refetchPicker(currentAeId, !lateOn);
@@ -1160,6 +1224,7 @@
       aeRow.innerHTML = `
         <span style="font-size:10px;color:#6e7280;flex-shrink:0">Call with</span>
         <select class="fb-ae-select" style="flex:1;background:#111118;border:1px solid #1e1e2e;border-radius:6px;color:#e2e8f0;font-size:11px;font-weight:600;padding:5px 7px;outline:none;cursor:pointer">
+          <option value="" ${!currentAeId ? "selected" : ""}>Me (my calendar)</option>
           ${aes.map(a => `<option value="${a.id}" ${a.id === currentAeId ? "selected" : ""}>${a.name}</option>`).join("")}
         </select>`;
       aeRow.querySelector(".fb-ae-select").addEventListener("change", async (e) => {
@@ -1178,77 +1243,90 @@
       picker.appendChild(n);
     }
 
-    // Slot list — avail: checkboxes, pre-select first 3; book: radio, pick one
-    const selected = new Set(slots.slice(0, booking ? 1 : 3).map(s => s.start));
-    const listEl = document.createElement("div");
-    listEl.style.cssText = "display:flex;flex-direction:column;gap:4px;margin-bottom:10px";
-    const rowEls = [];
+    // Selection: avail pre-picks up to 3, book pre-picks 1
+    const maxPick = booking ? 1 : 3;
+    const selected = new Set(slots.slice(0, maxPick).map(s => s.start));
 
-    function paintRow(row, isSelected) {
-      row.style.background = isSelected ? "#0e1e38" : "#111118";
-      row.style.borderColor = isSelected ? "#1d4ed8" : "#1e1e2e";
-      const cb = row.querySelector(".slot-cb");
-      cb.style.background = isSelected ? "#4285F4" : "transparent";
-      cb.style.borderColor = isSelected ? "#4285F4" : "#2a2a3a";
-      cb.textContent = isSelected ? "✓" : "";
-      row.querySelector(".slot-time").style.color = isSelected ? "#e2e8f0" : "#6e7280";
+    const listEl = document.createElement("div");
+    if (!slots.length) {
+      listEl.className = "fbp-empty";
+      listEl.innerHTML = `<span class="big">No open times</span>Try another AE${lateOn ? "" : " or turn on 🌙 Late"}.`;
+      picker.appendChild(listEl);
+    } else {
+      const chipEls = []; // [chipEl, slot]
+      const grouped = {}, order = [];
+      slots.forEach(s => {
+        const k = fbDayKey(s.start, displayTz);
+        if (!grouped[k]) { grouped[k] = []; order.push(k); }
+        grouped[k].push(s);
+      });
+      order.forEach(k => {
+        const dh = document.createElement("div");
+        dh.className = "fbp-day";
+        dh.textContent = fbFmtDay(grouped[k][0].start, displayTz);
+        listEl.appendChild(dh);
+
+        const chips = document.createElement("div");
+        chips.className = "fbp-chips";
+        grouped[k].forEach(slot => {
+          const chip = document.createElement("button");
+          chip.type = "button";
+          chip.className = "fbp-chip" + (selected.has(slot.start) ? " sel" : "");
+          chip.textContent = fbFmtTime(slot.start, displayTz);
+          chip.addEventListener("click", () => {
+            if (booking) {
+              selected.clear();
+              selected.add(slot.start);
+              chipEls.forEach(([c, s]) => c.classList.toggle("sel", selected.has(s.start)));
+            } else if (selected.has(slot.start)) {
+              selected.delete(slot.start);
+              chip.classList.remove("sel");
+            } else {
+              if (selected.size >= maxPick) return;
+              selected.add(slot.start);
+              chip.classList.add("sel");
+            }
+            updateStatus();
+          });
+          chipEls.push([chip, slot]);
+          chips.appendChild(chip);
+        });
+        listEl.appendChild(chips);
+      });
+      picker.appendChild(listEl);
     }
 
-    slots.forEach(slot => {
-      const row = document.createElement("div");
-      const isSelected = selected.has(slot.start);
-      row.style.cssText = `display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;cursor:pointer;background:${isSelected ? "#0e1e38" : "#111118"};border:1px solid ${isSelected ? "#1d4ed8" : "#1e1e2e"}`;
-      row.innerHTML = `
-        <span class="slot-cb" style="width:13px;height:13px;border-radius:${booking ? "50%" : "3px"};border:1px solid ${isSelected ? "#4285F4" : "#2a2a3a"};background:${isSelected ? "#4285F4" : "transparent"};display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:9px;color:#fff">${isSelected ? "✓" : ""}</span>
-        <span class="slot-time" style="font-size:11px;color:${isSelected ? "#e2e8f0" : "#6e7280"};font-variant-numeric:tabular-nums">${calFormatSlot(slot.start)}</span>
-      `;
-      row.addEventListener("click", () => {
-        if (booking) {
-          // Radio behavior — exactly one confirmed time
-          selected.clear();
-          selected.add(slot.start);
-          rowEls.forEach(([el, s]) => paintRow(el, selected.has(s.start)));
-          return;
-        }
-        if (selected.has(slot.start)) {
-          selected.delete(slot.start);
-          paintRow(row, false);
-        } else {
-          if (selected.size >= 3) return;
-          selected.add(slot.start);
-          paintRow(row, true);
-        }
-      });
-      rowEls.push([row, slot]);
-      listEl.appendChild(row);
-    });
-    picker.appendChild(listEl);
-
-    // Hint
-    const hint = document.createElement("div");
-    hint.style.cssText = "font-size:9px;color:#444;margin-bottom:8px;text-align:center";
-    hint.textContent = booking ? "Tap the time they confirmed" : "Select up to 3 slots to offer";
-    picker.appendChild(hint);
+    // Timezone + selection status
+    const statusEl = document.createElement("div");
+    statusEl.className = "fbp-status";
+    function updateStatus() {
+      if (!slots.length) { statusEl.textContent = ""; return; }
+      const tzPart = `Times in ${fbTzLabel(displayTz)}`;
+      const pickPart = booking ? "Tap the time they confirmed" : `${selected.size} of ${maxPick} picked`;
+      statusEl.textContent = [tzPart, pickPart].join(" · ");
+    }
+    updateStatus();
+    picker.appendChild(statusEl);
 
     // Button row
     const btnRow = document.createElement("div");
     btnRow.style.cssText = "display:flex;gap:6px";
     const backBtn = document.createElement("button");
-    backBtn.textContent = "← Back";
-    backBtn.style.cssText = "flex:1;background:#161616;border:1px solid #252525;border-radius:7px;color:#94a3b8;font-size:11px;font-weight:600;padding:8px;cursor:pointer";
+    backBtn.textContent = "Back";
+    backBtn.className = "fbp-btn fbp-btn-quiet";
     backBtn.addEventListener("click", () => { picker.remove(); b.style.display = ""; });
 
     const insertBtn = document.createElement("button");
     insertBtn.textContent = "Insert into DM →";
-    insertBtn.style.cssText = "flex:2;background:#0f2540;border:1px solid #1d4ed8;border-radius:7px;color:#93c5fd;font-size:11px;font-weight:600;padding:8px;cursor:pointer";
+    insertBtn.className = "fbp-btn fbp-btn-primary";
     insertBtn.addEventListener("click", () => {
       const chosen = [...selected];
       if (!chosen.length) return;
-      const slotText = calFormatSlotsForDm(chosen);
+      const slotText = calFormatSlotsForDm(chosen, displayTz);
       const og = document.querySelector('meta[property="og:title"]')?.content || "";
       const m = og.match(/^(.+?)\s*\(@/);
       const firstName = (m ? m[1].trim() : "").split(" ")[0] || username;
-      const dmText = `Hey ${firstName} — happy to walk through the dashboard, no pitch, just ${slotMins} min to show you what it looks like with your numbers.\n\n${currentAe ? "We're open" : "I'm open"} ${slotText} — any of those work?`;
+      const dmText = `Hey ${firstName} — happy to walk through the dashboard, no pitch, just ${slotMins} min to show you what it looks like with your numbers.\n\n${currentAe ? "We're open" : "I'm open"} ${slotText} ${fbTzLabel(displayTz)} — any of those work?`;
       picker.remove();
       b.style.display = "";
       showDmPreview(card, b, username, null, {
@@ -1267,13 +1345,13 @@
     const bookEventBtn = document.createElement("button");
     bookEventBtn.textContent = "📅 Book";
     bookEventBtn.title = "Create Google Calendar event";
-    bookEventBtn.style.cssText = "flex:1;background:#0d2b18;border:1px solid #166534;border-radius:7px;color:#4ade80;font-size:11px;font-weight:600;padding:8px;cursor:pointer";
+    bookEventBtn.className = "fbp-btn fbp-btn-primary";
     bookEventBtn.addEventListener("click", () => {
       const chosen = [...selected];
       if (!chosen.length) return;
       btnRow.style.display = "none";
 
-      const iStyle = "background:#0a1f10;border:1px solid #166534;border-radius:6px;color:#d1fae5;font-size:11px;padding:7px 9px;outline:none;width:100%;box-sizing:border-box";
+      const iStyle = "background:#0f1420;border:1px solid #26314a;border-radius:8px;color:#c6d2e8;font-size:12px;padding:8px 10px;outline:none;width:100%;box-sizing:border-box";
       const form = document.createElement("div");
       form.style.cssText = "display:flex;flex-direction:column;gap:7px;margin-top:8px";
 
@@ -1298,14 +1376,14 @@
 
       const slotLabel = document.createElement("div");
       slotLabel.textContent = "Which time did they confirm?";
-      slotLabel.style.cssText = "color:#86efac;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-top:2px";
+      slotLabel.style.cssText = "color:#9aa7bd;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-top:2px";
 
       const slotSel = document.createElement("select");
       slotSel.style.cssText = iStyle + ";cursor:pointer";
       chosen.forEach((isoStart, i) => {
         const opt = document.createElement("option");
         opt.value = i;
-        opt.textContent = calFormatSlot(isoStart);
+        opt.textContent = `${fbFmtDay(isoStart, displayTz)} · ${fbFmtTime(isoStart, displayTz)}`;
         slotSel.appendChild(opt);
       });
 
@@ -1314,12 +1392,12 @@
 
       const cancelForm = document.createElement("button");
       cancelForm.textContent = "← Back";
-      cancelForm.style.cssText = "flex:0 0 auto;background:transparent;border:1px solid #374151;border-radius:6px;color:#9ca3af;font-size:10px;padding:7px 10px;cursor:pointer";
+      cancelForm.className = "fbp-btn fbp-btn-quiet";
       cancelForm.addEventListener("click", () => { form.remove(); btnRow.style.display = ""; });
 
       const createBtn = document.createElement("button");
       createBtn.textContent = "📅 Create Event";
-      createBtn.style.cssText = "flex:1;background:#0d2b18;border:1px solid #166534;border-radius:6px;color:#4ade80;font-size:11px;font-weight:600;padding:7px;cursor:pointer";
+      createBtn.className = "fbp-btn fbp-btn-primary";
       createBtn.addEventListener("click", async () => {
         const idx = parseInt(slotSel.value, 10);
         const slot = slots.find(s => s.start === chosen[idx]);
@@ -1327,6 +1405,9 @@
         const leadName = nameInput.value.trim() || lead?.name || lead?.ig_username || username;
         const guestEmail = emailInput.value.trim() || undefined;
         createBtn.textContent = "Creating…";
+        createBtn.style.background = "";
+        createBtn.style.borderColor = "";
+        createBtn.style.color = "";
         createBtn.disabled = true;
         const result = await chrome.runtime.sendMessage({ type: "CREATE_CALENDAR_EVENT", slotStart: slot.start, slotEnd: slot.end, leadName, guestEmail, aeId: currentAeId || undefined }).catch(() => null);
         if (result?.ok) {
@@ -1338,13 +1419,15 @@
           setTimeout(() => { picker.remove(); }, 1500);
         } else if (result?.error === "slot_taken") {
           createBtn.textContent = "✗ Time just got taken — pick another";
+          createBtn.style.background = "transparent";
           createBtn.style.borderColor = "#7f1d1d";
-          createBtn.style.color = "#ef4444";
+          createBtn.style.color = "#f04358";
           createBtn.disabled = false;
         } else {
           createBtn.textContent = "✗ Failed — try again";
+          createBtn.style.background = "transparent";
           createBtn.style.borderColor = "#7f1d1d";
-          createBtn.style.color = "#ef4444";
+          createBtn.style.color = "#f04358";
           createBtn.disabled = false;
         }
       });
@@ -1361,7 +1444,6 @@
 
     btnRow.appendChild(backBtn);
     if (booking) {
-      bookEventBtn.style.flex = "2";
       bookEventBtn.textContent = "📅 Book →";
       btnRow.appendChild(bookEventBtn);
     } else {
@@ -1397,7 +1479,7 @@
     const stage = lead?.stage || "New";
     const channel = opts.channel || "ig_fanbasis";
 
-    const scripts = buildScriptList(lead, displayName || username, bio, aiOpener || null);
+    const scripts = buildScriptList(lead, displayName || username, bio, aiOpener || null, channel);
 
     // Prepend cross-channel bridge message when this is the second DM in the two-touch flow
     if (opts.crossChannelIntro) {
@@ -1945,7 +2027,10 @@
       try {
         const result = await saveLead(username, dashboardUrl, igSecret);
         chrome.runtime.sendMessage({ type: "REFRESH_CACHE" }).catch(() => {});
-        renderSaved(username, dashboardUrl, result?.leadId ? { id: result.leadId } : null, calendarUrl);
+        btn.textContent = "✓ Saved";
+        setTimeout(() => {
+          renderSaved(username, dashboardUrl, result?.leadId ? { id: result.leadId } : null, calendarUrl);
+        }, 1200);
       } catch {
         btn.textContent = "✕ Save failed — queued for retry";
         btn.style.background = "#7f1d1d";
