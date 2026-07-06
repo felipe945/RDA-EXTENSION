@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Builds the Chrome Web Store submission zip (npm run pack:webstore).
-# Same code as the unpacked build, with a store-safe manifest transform:
+# The source manifest is already Instagram-only (legacy LinkedIn/Twitter/ManyChat/
+# AgoraPulse surfaces were deleted in v2.9.0), so the store transform is now minimal:
 #   - strips `key` (CWS rejects packages that include it; the published ID
 #     will differ from the dev ID — verified safe: extension auth is brokered
 #     server-side and accepts any *.chromiumapp.org redirect)
-#   - drops dev + legacy surfaces (localhost, Twitter/X, ManyChat, AgoraPulse)
-#     so every remaining permission has a clean justification
-#   - narrows web_accessible_resources to Instagram only
-# The unpacked build (pack-extension.sh) is untouched — it keeps everything.
+#   - drops the localhost dev host so every remaining permission has a clean
+#     justification for reviewers
+#   - sets a marketing description
+# The unpacked build (pack-extension.sh) is untouched — it keeps localhost for dev.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -17,6 +18,18 @@ OUT="$ROOT/dist"
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$OUT"
+
+# Contract QUEUE: regenerate outreach-queue.js from lib/queue.ts before staging
+# (mirrors pack-extension.sh) so the store build can never ship a drifted copy.
+OQ="$SRC/outreach-queue.js"
+if ! npx esbuild "$ROOT/lib/queue.ts" --bundle --format=iife \
+      --global-name=FBQueue --tsconfig="$ROOT/tsconfig.json" \
+      --banner:js="// GENERATED from lib/queue.ts by pack-extension.sh — DO NOT EDIT. Edit lib/queue.ts and re-run npm run pack:ext." \
+      --footer:js="if(typeof window!=='undefined')window.FBQueue=FBQueue;" \
+      --outfile="$OQ"; then
+  echo "✗ esbuild failed bundling lib/queue.ts — likely a non-browser-pure import (a T1 fix). Aborting." >&2
+  exit 1
+fi
 
 cp -R "$SRC" "$STAGE/fanbasis-extension"
 find "$STAGE" -name ".DS_Store" -delete
@@ -30,30 +43,8 @@ m = json.load(open(path))
 m.pop("key", None)
 m["description"] = "FanBasis sales cockpit: capture Instagram leads, work the outreach queue, and book AE calls without leaving IG."
 
-KEEP_HOSTS = (
-    "https://www.instagram.com/*",
-    "https://i.instagram.com/*",
-    "https://www.linkedin.com/*",
-    "https://unified-sales-ops.vercel.app/*",
-)
-m["host_permissions"] = [h for h in m["host_permissions"] if h in KEEP_HOSTS]
-
-def keeps(matches):
-    return any("instagram" in x or "linkedin" in x for x in matches)
-m["content_scripts"] = [cs for cs in m["content_scripts"] if keeps(cs["matches"])]
-
-# Drop the legacy scripts entirely so reviewers don't flag orphan files
-import os
-d = os.path.dirname(path)
-for f in ("twitter.js", "content.js", "agora.js"):
-    p = os.path.join(d, f)
-    if os.path.exists(p):
-        os.remove(p)
-
-m["web_accessible_resources"] = [{
-    "resources": ["page-interceptor.js"],
-    "matches": ["https://www.instagram.com/*"],
-}]
+# Drop only the localhost dev host — the source manifest is already store-shaped.
+m["host_permissions"] = [h for h in m["host_permissions"] if "localhost" not in h]
 
 json.dump(m, open(path, "w"), indent=2)
 print(f"webstore manifest: v{m['version']}, {len(m['host_permissions'])} hosts, {len(m['content_scripts'])} content scripts")
