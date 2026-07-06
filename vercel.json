@@ -6,6 +6,6 @@
     "app/api/leads/batch-enrich/route.ts": { "maxDuration": 300 }
   },
   "crons": [
-    { "path": "/api/ai/research-drain?limit=15", "schedule": "*/10 * * * *" }
+    { "path": "/api/ai/research-drain?limit=15", "schedule": "0 6 * * *" }
   ]
 }
