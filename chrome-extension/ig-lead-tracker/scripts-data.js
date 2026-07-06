@@ -217,7 +217,7 @@ const SCRIPTS = {
     },
     {
       label: "ID Verification Steps",
-      text: "Hi [name],\n\nHere's a step-by-step breakdown for getting set up with FanBasis.\n\nOnce you log into your Seller Dashboard:\n1. At the top of the dashboard, click "Onboarding Checklist"\n2. Select "ID Verification"\n3. Click "Start"\n\nFor ID Verification, you'll need:\n• Articles of Incorporation\n• 90 Days of Business Bank Statements\n• Government-Issued ID + Selfie Verification (from owner)\n\nLet me know if you have any questions!\n\nChristina",
+      text: "Hi [name],\n\nHere's a step-by-step breakdown for getting set up with FanBasis.\n\nOnce you log into your Seller Dashboard:\n1. At the top of the dashboard, click \"Onboarding Checklist\"\n2. Select \"ID Verification\"\n3. Click \"Start\"\n\nFor ID Verification, you'll need:\n• Articles of Incorporation\n• 90 Days of Business Bank Statements\n• Government-Issued ID + Selfie Verification (from owner)\n\nLet me know if you have any questions!\n\nChristina",
     },
   ],
 

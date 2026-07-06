@@ -6,6 +6,44 @@
 
 const DEFAULT_URL = "https://fanmas.vercel.app";
 
+// ── URL healing ───────────────────────────────────────────────────────────────
+// unified-sales-ops.vercel.app now 307-redirects to fanmas, and fetch strips the
+// Authorization header across a cross-origin redirect → the leads fetch lands
+// unauthenticated (401) and the cache silently stayed empty. Any stored dashboardUrl
+// that isn't the canonical prod host (or localhost for dev) gets healed to
+// DEFAULT_URL. This also future-proofs the next rename: an unknown host can't
+// re-trigger the token-stripping redirect.
+const DEAD_HOSTS = ["unified-sales-ops.vercel.app"];
+function healUrl(u) {
+  try {
+    const host = new URL(u).hostname;
+    if (host === "localhost") return u;                 // local dev
+    if (host === new URL(DEFAULT_URL).hostname) return u; // canonical prod
+    return DEFAULT_URL;                                  // dead/unknown host → heal
+  } catch { return DEFAULT_URL; }
+}
+
+// One-time migration: rewrite any stale dashboardUrl persisted in storage so the
+// content scripts / sidepanel / popup that read it directly also see the fix.
+async function healStoredUrls() {
+  try {
+    const [sync, local] = await Promise.all([
+      chrome.storage.sync.get({ dashboardUrl: null }),
+      chrome.storage.local.get({ fb_bootstrap: null }),
+    ]);
+    if (sync.dashboardUrl && healUrl(sync.dashboardUrl) !== sync.dashboardUrl) {
+      await chrome.storage.sync.set({ dashboardUrl: healUrl(sync.dashboardUrl) });
+    }
+    const boot = local.fb_bootstrap;
+    if (boot?.dashboardUrl && healUrl(boot.dashboardUrl) !== boot.dashboardUrl) {
+      boot.dashboardUrl = healUrl(boot.dashboardUrl);
+      await chrome.storage.local.set({ fb_bootstrap: boot });
+    }
+  } catch (err) {
+    console.warn("[FanBasis] healStoredUrls failed:", err);
+  }
+}
+
 // ── Rep auth (CONNECT contracts C1/C2) ────────────────────────────────────────
 // The extension never runs its own Google OAuth. Sign-in goes through the
 // dashboard: launchWebAuthFlow → /api/extension/auth/start → `#token=<repToken>`
@@ -58,7 +96,7 @@ async function signIn() {
   return fetchBootstrap();
 }
 
-let cache = { leads: [], notifications: [], overdue: [], lastFetch: 0 };
+let cache = { leads: [], notifications: [], overdue: [], lastFetch: 0, authError: false };
 const seenNotifIds = new Set();
 
 // ── Settings ──────────────────────────────────────────────────────────────────
@@ -67,12 +105,12 @@ const seenNotifIds = new Set();
 // only cover the window before the first sign-in.
 async function getSettings() {
   const [sync, local] = await Promise.all([
-    chrome.storage.sync.get({ dashboardUrl: DEFAULT_URL, igSecret: "", fanbasisHandle: "fanbasis", personalIgUsername: "felipeguimars", calendarUrl: "" }),
+    chrome.storage.sync.get({ dashboardUrl: DEFAULT_URL, igSecret: "", fanbasisHandle: "fanbasis", personalIgUsername: "", calendarUrl: "" }),
     chrome.storage.local.get({ fb_bootstrap: null, fb_rep_token: null }),
   ]);
   const boot = local.fb_bootstrap;
   return {
-    dashboardUrl: boot?.dashboardUrl || sync.dashboardUrl || DEFAULT_URL,
+    dashboardUrl: healUrl(boot?.dashboardUrl || sync.dashboardUrl || DEFAULT_URL),
     igSecret: sync.igSecret,
     repToken: local.fb_rep_token || "",
     signedIn: !!local.fb_rep_token,
@@ -96,9 +134,16 @@ async function refreshCache() {
       fetch(`${dashboardUrl}/api/notifications?mode=sales`, { headers: bearer }),
     ]);
 
-    if (leadsRes.status === "fulfilled" && leadsRes.value.ok) {
-      const { leads } = await leadsRes.value.json();
-      cache.leads = leads ?? [];
+    if (leadsRes.status === "fulfilled") {
+      if (leadsRes.value.ok) {
+        const { leads } = await leadsRes.value.json();
+        cache.leads = leads ?? [];
+        cache.authError = false;
+      } else if (leadsRes.value.status === 401 || leadsRes.value.status === 403) {
+        // Never eat a 401 as "no leads": keep fb_rep_token (may be transient) but
+        // flag it so the sidepanel shows the sign-in gate instead of an empty queue.
+        cache.authError = true;
+      }
     }
 
     if (notifsRes.status === "fulfilled" && notifsRes.value.ok) {
@@ -152,7 +197,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         break;
 
       case "GET_SETTINGS":
-        sendResponse(settings);
+        sendResponse({ ...settings, authError: !!cache.authError });
         break;
 
       case "SIGN_IN": {
@@ -269,19 +314,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case "UPDATE_LEAD_STAGE": {
         const { leadId, stage } = msg;
         try {
-          await fetch(`${dashboardUrl}/api/leads`, {
+          const res = await fetch(`${dashboardUrl}/api/leads`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json", ...bearer },
             body: JSON.stringify({ id: leadId, stage, updated_at: new Date().toISOString() }),
           });
+          if (!res.ok) throw new Error(String(res.status));
           chrome.tabs.query({ url: "https://www.instagram.com/*" }, (tabs) => {
             for (const tab of (tabs || [])) {
               chrome.tabs.sendMessage(tab.id, { type: "LEAD_UPDATED", leadId }).catch(() => {});
             }
           });
           setTimeout(refreshCache, 1500);
-        } catch {}
-        sendResponse({ ok: true });
+          sendResponse({ ok: true });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
         break;
       }
 
@@ -476,6 +524,42 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         break;
       }
 
+      // D1 (T1 auth contract): /api/opener + /api/ai/research-lead require a
+      // Bearer repToken and CORS-allowlist only the extension's own origin —
+      // so both calls run here in the SW (Origin: chrome-extension://<id>).
+      // UI surfaces (sidepanel, IG card) reach them via sendMessage.
+      case "FETCH_OPENER": {
+        try {
+          if (!bearer.Authorization) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
+          const qs = new URLSearchParams(msg.params || {}).toString();
+          const resp = await fetch(`${dashboardUrl}/api/opener?${qs}`, { headers: bearer });
+          if (resp.status === 401) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
+          const data = await resp.json().catch(() => null);
+          if (!resp.ok) { sendResponse({ ok: false, error: `opener_${resp.status}` }); break; }
+          sendResponse({ ok: true, opener: data?.opener || null });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+        break;
+      }
+
+      case "RESEARCH_LEAD": {
+        try {
+          if (!bearer.Authorization) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
+          const resp = await fetch(`${dashboardUrl}/api/ai/research-lead`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...bearer },
+            body: JSON.stringify({ leadId: msg.leadId }),
+          });
+          if (resp.status === 401) { sendResponse({ ok: false, error: "signed_out", needsSignIn: true }); break; }
+          if (!resp.ok) { sendResponse({ ok: false, error: `research_${resp.status}` }); break; }
+          sendResponse({ ok: true });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+        break;
+      }
+
       default:
         sendResponse({ ok: false });
     }
@@ -500,20 +584,26 @@ chrome.notifications.onClicked.addListener(async () => {
 // ── Startup ───────────────────────────────────────────────────────────────────
 
 chrome.runtime.onStartup.addListener(() => {
-  refreshCache();
-  fetchBootstrap().catch(() => {});
+  healStoredUrls().finally(() => {
+    refreshCache();
+    fetchBootstrap().catch(() => {});
+  });
 });
 chrome.runtime.onInstalled.addListener(() => {
-  refreshCache();
-  fetchBootstrap().catch(() => {});
+  healStoredUrls().finally(() => {
+    refreshCache();
+    fetchBootstrap().catch(() => {});
+  });
   // v2.2.0: the extension no longer runs its own Google OAuth — drop its tokens
   chrome.storage.local.remove(["cal_token", "cal_token_exp", "cal_calendars", "cal_user_name"]).catch(() => {});
   chrome.storage.sync.remove(["cal_selected", "cal_slot_mins"]).catch(() => {});
 });
 
-// Seed cache from local storage, then refresh live
+// Seed cache from local storage, then heal stale URLs and refresh live
 chrome.storage.local.get({ fb_cache: null }, ({ fb_cache }) => {
   if (fb_cache) cache = fb_cache;
-  refreshCache();
-  fetchBootstrap().catch(() => {});
+  healStoredUrls().finally(() => {
+    refreshCache();
+    fetchBootstrap().catch(() => {});
+  });
 });

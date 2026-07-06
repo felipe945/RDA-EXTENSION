@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FanMas",
-  "version": "2.8.2",
-  "description": "Unified sales pipeline — Instagram, LinkedIn, Twitter, Gmail in one place",
+  "version": "2.10.0",
+  "description": "Instagram sales pipeline — lead capture, outreach queue, and booking in one place",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzwrYLCbM2uxQ4Pbtv6QNgCRQ233ZkpHc1jlljJMfn98LTp5hkg9ryI0axrFMNWSBRoMkSoZXV/7SExFxZaWzfyXJ00aUTnhF2bmpldtI5kk9tYNgax8egvvQlw6+HEOEsFLQThv4chhDawSHBqjGfAiAYr94jj4ZwEamRyP7sh5VTwza7TfknqLQPjIXhErLpigdUjFzvYdS8iX5eewqPHR5wBirdpKPV9THMP0Nj6QFomiroYjrNS1prnGcMe6uA5880/3tlcWEb3z2jG7skFeB7wz1/jv/k5nq0wYyAu9CJsis6rYfVEwtc6MxEIeexqrs367Zgbm9YTquHSvWEQIDAQAB",
 
   "permissions": [
@@ -18,13 +18,7 @@
   "host_permissions": [
     "https://www.instagram.com/*",
     "https://i.instagram.com/*",
-    "https://www.linkedin.com/*",
-    "https://twitter.com/*",
-    "https://x.com/*",
-    "https://*.manychat.com/*",
-    "https://*.agorapulse.com/*",
     "https://fanmas.vercel.app/*",
-    "https://unified-sales-ops.vercel.app/*",
     "http://localhost:3000/*"
   ],
 
@@ -37,33 +31,13 @@
       "matches": ["https://www.instagram.com/*"],
       "js": ["scripts-data.js", "outreach-queue.js", "instagram.js"],
       "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://www.linkedin.com/*"],
-      "js": ["linkedin.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://twitter.com/*", "https://x.com/*"],
-      "js": ["twitter.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["*://*.manychat.com/*"],
-      "js": ["content.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["*://*.agorapulse.com/*"],
-      "js": ["agora.js"],
-      "run_at": "document_idle"
     }
   ],
 
   "web_accessible_resources": [
     {
-      "resources": ["page-interceptor.js", "dashboard.html"],
-      "matches": ["https://www.instagram.com/*", "<all_urls>"]
+      "resources": ["page-interceptor.js"],
+      "matches": ["https://www.instagram.com/*"]
     }
   ],
 

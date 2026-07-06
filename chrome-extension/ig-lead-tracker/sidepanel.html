@@ -13,8 +13,8 @@
     <!-- ── Header ─────────────────────────────────────────────────────── -->
     <header class="header">
       <div class="header-left">
-        <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:7px;background:linear-gradient(140deg,#23232f,#141419);border:1px solid #2c2c3b;flex-shrink:0"><svg width="16" height="16" viewBox="0 0 200 200"><defs><clipPath id="Lh"><rect width="100" height="200"/></clipPath><clipPath id="Rh"><rect x="100" width="100" height="200"/></clipPath><mask id="Ch"><rect width="200" height="200" fill="#fff"/><g fill="#000"><circle cx="108" cy="87" r="16"/><path d="M100,98 C98,113 88,123 74,135 C94,135 110,121 114,103 C115,99 113,96 109,95 Z"/></g></mask></defs><g mask="url(#Ch)"><g clip-path="url(#Lh)" fill="#F1567A"><polygon points="100,55 111.76,88.82 147.55,89.55 119.02,111.18 129.4,145.45 100,125 70.6,145.45 80.98,111.18 52.45,89.55 88.24,88.82"/></g><g clip-path="url(#Rh)" fill="#8FBBFB"><polygon points="100,55 111.76,88.82 147.55,89.55 119.02,111.18 129.4,145.45 100,125 70.6,145.45 80.98,111.18 52.45,89.55 88.24,88.82"/></g></g></svg></span>
-        <span style="font-weight:800;font-size:14px;letter-spacing:-.02em;color:#EAEEF7">Fan<span style="color:#F1567A">Mas</span></span>
+        <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:7px;background:linear-gradient(140deg,#23232f,#141419);border:1px solid #2c2c3b;flex-shrink:0"><svg width="16" height="16" viewBox="0 0 200 200"><defs><clipPath id="Lh"><rect width="100" height="200"/></clipPath><clipPath id="Rh"><rect x="100" width="100" height="200"/></clipPath><mask id="Ch"><rect width="200" height="200" fill="#fff"/><g fill="#000"><circle cx="108" cy="87" r="16"/><path d="M100,98 C98,113 88,123 74,135 C94,135 110,121 114,103 C115,99 113,96 109,95 Z"/></g></mask></defs><g mask="url(#Ch)"><g clip-path="url(#Lh)" fill="#FF3A69"><polygon points="100,55 111.76,88.82 147.55,89.55 119.02,111.18 129.4,145.45 100,125 70.6,145.45 80.98,111.18 52.45,89.55 88.24,88.82"/></g><g clip-path="url(#Rh)" fill="#8FBBFB"><polygon points="100,55 111.76,88.82 147.55,89.55 119.02,111.18 129.4,145.45 100,125 70.6,145.45 80.98,111.18 52.45,89.55 88.24,88.82"/></g></g></svg></span>
+        <span style="font-weight:800;font-size:14px;letter-spacing:-.02em;color:#EAEEF7">Fan<span style="color:#FF3A69">Mas</span></span>
         <span id="syncDot" class="sync-dot" title="Synced"></span>
         <span id="account-pill" class="account-pill" style="display:none">
           <span class="account-dot"></span>
@@ -28,9 +28,9 @@
     </header>
 
     <!-- Update-available nudge — filled in by checkExtensionUpdate() -->
-    <div id="update-banner" style="display:none;padding:7px 12px;background:#2a1f38;border-bottom:1px solid #7c3aed;font-size:11px;color:#c4b5fd;align-items:center;gap:8px">
+    <div id="update-banner" style="display:none;padding:7px 12px;background:rgba(var(--pink-rgb),.08);border-bottom:1px solid var(--pink);font-size:11px;color:#ffb3c4;align-items:center;gap:8px">
       <span id="update-banner-text">Update available</span>
-      <a id="update-banner-link" href="#" target="_blank" style="margin-left:auto;color:#e9d5ff;font-weight:700;text-decoration:none;flex-shrink:0">Get it →</a>
+      <a id="update-banner-link" href="#" target="_blank" style="margin-left:auto;color:var(--pink);font-weight:700;text-decoration:none;flex-shrink:0">Get it →</a>
     </div>
 
     <!-- ── Tab bar ────────────────────────────────────────────────────── -->
@@ -63,6 +63,7 @@
     <!-- ── Scripts tab ────────────────────────────────────────────────── -->
     <div id="tab-scripts" class="tab-content">
       <div class="scripts-filter">
+        <input id="scriptSearch" class="scripts-search" type="search" placeholder="Search scripts…" autocomplete="off" />
         <select id="scriptCategory" class="scripts-select"></select>
       </div>
       <div id="scriptList" class="scroll-area"></div>
@@ -83,9 +84,9 @@
 
   <!-- ── Sign-in gate — the only thing shown until the rep signs in ──── -->
   <div id="signin-gate" style="display:none;position:fixed;inset:0;z-index:999;background:#0b0b12;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:32px;text-align:center">
-    <svg width="44" height="44" viewBox="0 0 200 200"><defs><clipPath id="Lg"><rect width="100" height="200"/></clipPath><clipPath id="Rg"><rect x="100" width="100" height="200"/></clipPath><mask id="Cg"><rect width="200" height="200" fill="#fff"/><g fill="#000"><circle cx="108" cy="87" r="16"/><path d="M100,98 C98,113 88,123 74,135 C94,135 110,121 114,103 C115,99 113,96 109,95 Z"/></g></mask></defs><g mask="url(#Cg)"><g clip-path="url(#Lg)" fill="#F1567A"><polygon points="100,55 111.76,88.82 147.55,89.55 119.02,111.18 129.4,145.45 100,125 70.6,145.45 80.98,111.18 52.45,89.55 88.24,88.82"/></g><g clip-path="url(#Rg)" fill="#8FBBFB"><polygon points="100,55 111.76,88.82 147.55,89.55 119.02,111.18 129.4,145.45 100,125 70.6,145.45 80.98,111.18 52.45,89.55 88.24,88.82"/></g></g></svg>
+    <svg width="44" height="44" viewBox="0 0 200 200"><defs><clipPath id="Lg"><rect width="100" height="200"/></clipPath><clipPath id="Rg"><rect x="100" width="100" height="200"/></clipPath><mask id="Cg"><rect width="200" height="200" fill="#fff"/><g fill="#000"><circle cx="108" cy="87" r="16"/><path d="M100,98 C98,113 88,123 74,135 C94,135 110,121 114,103 C115,99 113,96 109,95 Z"/></g></mask></defs><g mask="url(#Cg)"><g clip-path="url(#Lg)" fill="#FF3A69"><polygon points="100,55 111.76,88.82 147.55,89.55 119.02,111.18 129.4,145.45 100,125 70.6,145.45 80.98,111.18 52.45,89.55 88.24,88.82"/></g><g clip-path="url(#Rg)" fill="#8FBBFB"><polygon points="100,55 111.76,88.82 147.55,89.55 119.02,111.18 129.4,145.45 100,125 70.6,145.45 80.98,111.18 52.45,89.55 88.24,88.82"/></g></g></svg>
     <span class="logo" style="font-size:22px">FanMas</span>
-    <p style="font-size:12px;color:#5c5c78;line-height:1.6;max-width:230px;margin:0">One sign-in connects your leads, your identity, and your calendar. Nothing else to set up.</p>
+    <p id="gate-tagline" style="font-size:12px;color:#5c5c78;line-height:1.6;max-width:230px;margin:0">One sign-in connects your leads, your identity, and your calendar. Nothing else to set up.</p>
     <button id="signInBtn" style="display:flex;align-items:center;gap:10px;background:#fff;border:none;border-radius:8px;color:#1f1f1f;font-size:13px;font-weight:600;padding:10px 20px;cursor:pointer">
       <svg width="16" height="16" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.2C12.4 13.4 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.6 5.9c4.5-4.1 7-10.2 7-17.6z"/><path fill="#FBBC05" d="M10.5 28.6c-.5-1.5-.8-3-.8-4.6s.3-3.1.8-4.6l-7.9-6.2C.9 16.5 0 20.1 0 24s.9 7.5 2.6 10.8l7.9-6.2z"/><path fill="#34A853" d="M24 48c6.3 0 11.6-2.1 15.5-5.7l-7.6-5.9c-2.1 1.4-4.8 2.3-7.9 2.3-6.3 0-11.6-3.9-13.5-9.3l-7.9 6.2C6.5 42.6 14.6 48 24 48z"/></svg>
       Sign in with Google

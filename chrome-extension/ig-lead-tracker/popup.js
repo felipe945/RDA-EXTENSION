@@ -18,7 +18,9 @@ function showStats(leads, overdue, notifs) {
   el.innerHTML =
     `${active} lead${active !== 1 ? "s" : ""}` +
     (overdue > 0 ? ` · <span class="stat-urgent">${overdue} overdue</span>` : "") +
-    (notifs > 0 ? ` · <span class="stat-urgent">${notifs} replies</span>` : "");
+    (notifs > 0 ? ` · <span class="stat-urgent">${notifs} replies</span>` : "") +
+    // F3: detection is passive (extension interception) — set expectations
+    (notifs > 0 ? `<span class="stat-note">Replies are detected while you're viewing Instagram DMs</span>` : "");
 }
 
 chrome.storage.local.get({ fb_cache: null }, ({ fb_cache }) => {

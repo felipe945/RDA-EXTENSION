@@ -30,6 +30,26 @@ function repAuthHeader() {
   return repToken ? { Authorization: `Bearer ${repToken}` } : {};
 }
 
+// Lightweight toast — surfaces failed writes so a half-working panel doesn't look
+// like it succeeded. Auto-dismisses; errors are red, successes green.
+function spToast(msg, isError = true) {
+  let el = document.getElementById("sp-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "sp-toast";
+    el.style.cssText =
+      "position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:1000;" +
+      "max-width:88%;padding:9px 14px;border-radius:8px;font-size:12px;font-weight:600;" +
+      "color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.35);opacity:0;transition:opacity .2s;pointer-events:none";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.background = isError ? "#dc2626" : "#16a34a";
+  el.style.opacity = "1";
+  clearTimeout(spToast._t);
+  spToast._t = setTimeout(() => { el.style.opacity = "0"; }, 3200);
+}
+
 // C5: PATCH /api/leads/:id — direct field updates (stage, notes, due_at)
 async function apiPatchLead(leadId, updates) {
   try {
@@ -41,7 +61,8 @@ async function apiPatchLead(leadId, updates) {
     if (!res.ok) throw new Error(String(res.status));
     chrome.runtime.sendMessage({ type: "REFRESH_CACHE" }).catch(() => {});
     return true;
-  } catch {
+  } catch (err) {
+    spToast(/40[13]/.test(String(err?.message)) ? "Session expired — sign in again" : "Couldn't save — try again");
     return false;
   }
 }
@@ -98,7 +119,7 @@ const ALL_STAGES = ["New", "Warming", "DM Sent", "Replied", "Qualifying", "Call 
 function stageColor(stage) {
   const c = {
     "New": "#64748b", "Warming": "#f59e0b", "DM Sent": "#3b82f6",
-    "Replied": "#8b5cf6", "Qualifying": "#06b6d4",
+    "Replied": "#FF3A69", "Qualifying": "#06b6d4",
     "Call Offered": "#10b981", "Booked": "#22c55e",
     "Closed": "#475569", "DQ": "#ef4444",
   };
@@ -225,6 +246,8 @@ async function snoozeLeadServer(leadId, days) {
   if (res?.ok) {
     const target = allLeads.find((l) => l.id === leadId);
     if (target) target.snoozed_until = until;
+  } else {
+    spToast("Couldn't snooze — try again");
   }
   return !!res?.ok;
 }
@@ -858,6 +881,7 @@ function renderOutreach() {
       <button class="touch-chip ${fbDone ? "touch-done" : ""}" id="fbChip">${fbDone ? "✓" : "○"} FB</button>
       <button class="touch-chip ${persDone ? "touch-done" : ""}" id="persChip">${persDone ? "✓" : "○"} Pers.</button>
     </div>
+    ${!personalIgUsername ? `<p class="touch-hint">Set your personal Instagram in the dashboard → Settings → Extension.</p>` : ""}
     ${showTouchHint ? `<p class="touch-hint">Mark channels done above before clicking DM Sent</p>` : ""}
   ` : "";
 
@@ -905,9 +929,9 @@ function renderOutreach() {
         </button>
       </div>
       <div style="display:flex;gap:5px;margin-top:5px">
-        <button style="flex:1;background:#161616;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:6px;cursor:pointer" id="dqBtn" data-id="${esc(lead.id)}">✗ DQ</button>
-        <button style="flex:1;background:#151B2E;border:1px solid #2A3554;border-radius:6px;color:#94A3B8;font-size:11px;font-weight:600;padding:6px;cursor:pointer" id="availCalBtn" data-id="${esc(lead.id)}">🕐 Times</button>
-        <button style="flex:1;background:#0f2540;border:1px solid #1d4ed8;border-radius:6px;color:#93c5fd;font-size:11px;font-weight:600;padding:6px;cursor:pointer" id="bookCalBtn" data-id="${esc(lead.id)}">📅 Book</button>
+        <button class="btn-row-sm btn-dq" id="dqBtn" data-id="${esc(lead.id)}">✗ DQ</button>
+        <button class="btn-row-sm" id="availCalBtn" data-id="${esc(lead.id)}">🕐 Times</button>
+        <button class="btn-row-sm" id="bookCalBtn" data-id="${esc(lead.id)}">📅 Book</button>
       </div>
 
       <div style="display:flex;align-items:center;gap:6px;margin-top:5px">
@@ -920,12 +944,7 @@ function renderOutreach() {
       <div class="card-notes" style="margin-top:8px">
         <textarea id="leadNotes" rows="2" placeholder="Notes… (auto-saves)">${esc(lead.notes || "")}</textarea>
       </div>
-      <div style="display:flex;align-items:center;gap:5px;margin-top:5px;flex-wrap:wrap">
-        <span style="font-size:10px;color:#475569;flex-shrink:0">Follow up:</span>
-        ${[1, 3, 7].map((d) => `<button class="fu-btn" data-days="${d}">+${d}d</button>`).join("")}
-        ${lead.due_at ? `<button class="fu-btn" id="fuClearBtn" title="Clear due date">clear</button>` : ""}
-        ${lead.due_at ? `<span style="font-size:10px;color:#64748b;margin-left:auto">${esc(dueLabel(lead.due_at))}</span>` : ""}
-      </div>
+      ${lead.due_at ? `<div style="font-size:10px;color:#64748b;margin-top:5px;text-align:right">${esc(dueLabel(lead.due_at))}</div>` : ""}
 
       <div class="outreach-nav">
         <button class="nav-btn" id="prevBtn" ${outreachIdx === 0 ? "disabled" : ""}>← Prev</button>
@@ -999,20 +1018,6 @@ function renderOutreach() {
     });
   }
 
-  // Follow-up date setter — PATCH /api/leads/:id { due_at }
-  list.querySelectorAll(".fu-btn[data-days]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      const due = new Date(Date.now() + parseInt(btn.dataset.days) * 86400000).toISOString();
-      await apiPatchLead(lead.id, { due_at: due });
-      await loadData();
-    });
-  });
-  document.getElementById("fuClearBtn")?.addEventListener("click", async () => {
-    await apiPatchLead(lead.id, { due_at: null });
-    await loadData();
-  });
-
   // Copy opener
   const copyOpenerBtn = document.getElementById("copyOpenerBtn");
   if (copyOpenerBtn) {
@@ -1030,8 +1035,10 @@ function renderOutreach() {
       generateAiBtn.textContent = "Generating…";
       generateAiBtn.disabled = true;
       try {
-        const res = await fetch(`${dashboardUrl}/api/ai/research-lead`, { method: "POST", headers: { "Content-Type": "application/json", ...repAuthHeader() }, body: JSON.stringify({ leadId: lead.id }) });
-        if (!res.ok) throw new Error("research-lead failed");
+        // D1: routed through the background SW so the Bearer token + extension
+        // Origin satisfy the API's auth gate and CORS allowlist.
+        const res = await chrome.runtime.sendMessage({ type: "RESEARCH_LEAD", leadId: lead.id });
+        if (!res?.ok) throw new Error(res?.error || "research-lead failed");
         await chrome.runtime.sendMessage({ type: "REFRESH_CACHE" });
         await loadData();
       } catch {
@@ -1117,12 +1124,12 @@ function renderOutreach() {
       clearTimeout(Number(btn.dataset.timer));
       delete btn.dataset.undoing;
       btn.textContent = "✗ DQ";
-      btn.style.cssText = "flex:1;background:#161616;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:6px;cursor:pointer";
+      btn.className = "btn-row-sm btn-dq";
       return;
     }
     btn.dataset.undoing = "1";
     btn.textContent = "↩ Undo";
-    btn.style.cssText = "flex:1;background:#1a1a1a;border:1px solid #444;border-radius:6px;color:#888;font-size:11px;font-weight:600;padding:6px;cursor:pointer";
+    btn.className = "btn-row-sm btn-undo";
     btn.dataset.timer = setTimeout(async () => {
       delete btn.dataset.undoing;
       btn.textContent = "DQ'd"; btn.disabled = true;
@@ -1213,6 +1220,7 @@ function renderOutreach() {
 
 const catSelect = document.getElementById("scriptCategory");
 const scriptListEl = document.getElementById("scriptList");
+const scriptSearchEl = document.getElementById("scriptSearch");
 
 // Quicklinks tab — team + personal links come from the dashboard via bootstrap
 // and render read-only. All management lives on the dashboard (Team Settings),
@@ -1259,14 +1267,25 @@ function renderScripts() {
       catSelect.appendChild(opt);
     });
   }
-  const cat = catSelect.value;
-  scriptListEl.innerHTML = (SCRIPTS[cat] || []).map((s) => `
+  // Search-first (F2): a query searches every category by name/content; the
+  // category select only scopes the list while the search box is empty.
+  const q = (scriptSearchEl?.value || "").trim().toLowerCase();
+  let items;
+  if (q) {
+    items = Object.entries(SCRIPTS).flatMap(([cat, list]) =>
+      list.filter((s) => `${s.label} ${s.text}`.toLowerCase().includes(q))
+          .map((s) => ({ ...s, cat })));
+  } else {
+    items = (SCRIPTS[catSelect.value] || []).map((s) => ({ ...s, cat: null }));
+  }
+
+  scriptListEl.innerHTML = items.length ? items.map((s) => `
     <div class="script-item">
-      <div class="script-label">${esc(s.label)}</div>
+      <div class="script-label">${esc(s.label)}${s.cat ? ` <span style="font-weight:400;color:#475569">· ${esc(s.cat)}</span>` : ""}</div>
       <p class="script-text">${esc(s.text)}</p>
       <button class="copy-btn script-copy" data-text="${encodeURIComponent(s.text)}">Copy</button>
     </div>
-  `).join("");
+  `).join("") : `<div class="empty-state"><div class="empty-icon">🔍</div><p>No scripts match</p><span>Try a different search term.</span></div>`;
 
   scriptListEl.querySelectorAll(".script-copy").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1277,6 +1296,7 @@ function renderScripts() {
   });
 }
 catSelect.addEventListener("change", renderScripts);
+scriptSearchEl?.addEventListener("input", renderScripts);
 
 // ── Load data ─────────────────────────────────────────────────────────────────
 
@@ -1291,6 +1311,10 @@ async function loadData() {
   calendarUrl = s.calendarUrl || "";
   repToken = s.repToken || "";
   renderAuth(s);
+
+  // renderAuth shows the sign-in gate (red dot) on an auth error. Bail before
+  // rendering leads so a stale/empty cache isn't shown as synced truth.
+  if (s.authError || !s.signedIn) return;
 
   await loadSnoozedLeads();
   await updateAccountPill();
@@ -1339,12 +1363,28 @@ function renderAuth(settings) {
   const panel = document.querySelector(".panel");
   const section = document.getElementById("accountSection");
   const statusEl = document.getElementById("accountStatus");
-  const signedIn = !!settings?.signedIn;
+  const tagline = document.getElementById("gate-tagline");
+  // An expired/invalid token (401/403 on the leads fetch) is NOT "signed in with
+  // no leads" — show the gate so we never render an empty queue as the truth.
+  const authError = !!settings?.authError;
+  const signedIn = !!settings?.signedIn && !authError;
 
   gate.style.display = signedIn ? "none" : "flex";
   panel.style.display = signedIn ? "" : "none";
   section.style.display = signedIn ? "" : "none";
-  if (!signedIn) return;
+  if (tagline) {
+    if (authError) {
+      tagline.textContent = "Session expired — sign in again to reconnect your leads.";
+      tagline.style.color = "#fbbf24";
+    } else {
+      tagline.textContent = "One sign-in connects your leads, your identity, and your calendar. Nothing else to set up.";
+      tagline.style.color = "#5c5c78";
+    }
+  }
+  if (!signedIn) {
+    document.getElementById("syncDot").className = authError ? "sync-dot error" : "sync-dot";
+    return;
+  }
 
   const rep = settings.rep || {};
   const dot = (color) => `<span style="width:6px;height:6px;border-radius:50%;background:${color};display:inline-block;flex:0 0 auto"></span>`;

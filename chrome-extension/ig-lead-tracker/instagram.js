@@ -13,6 +13,17 @@
 
   const userCache = {};
 
+  // Heal a stale dashboardUrl (see background.js): a non-canonical host 307-redirects
+  // and fetch strips the Bearer token across origins → 401. Keep localhost for dev.
+  const FB_DEFAULT_URL = "https://fanmas.vercel.app";
+  function healUrl(u) {
+    try {
+      const host = new URL(u).hostname;
+      if (host === "localhost") return u;
+      return host === "fanmas.vercel.app" ? u : FB_DEFAULT_URL;
+    } catch { return FB_DEFAULT_URL; }
+  }
+
   function extractUsernameFromUrl() {
     const m = window.location.pathname.match(/^\/([^/]+)\/?$/);
     if (!m) return null;
@@ -130,7 +141,23 @@
 
   // ── Part 2: Floating lead card ─────────────────────────────────────────────
 
-  const STAGES = ["New", "Warming", "DM Sent", "Replied", "Qualifying", "Call Offered", "Booked", "Closed", "DQ", "Active", "Churned"];
+  // F1: canonical 9 stages — matches sidepanel.js ALL_STAGES + lib/stages.ts.
+  // Prefer the bundled FBQueue list when it exports one so this can't drift again.
+  // Legacy stages (Active, Churned) are never selectable; a lead already on one
+  // shows it as a disabled grey option (see stageOptionsHtml).
+  const FALLBACK_STAGES = ["New", "Warming", "DM Sent", "Replied", "Qualifying", "Call Offered", "Booked", "Closed", "DQ"];
+  const STAGES = (Array.isArray(window.FBQueue?.ALL_STAGES) && window.FBQueue.ALL_STAGES.length)
+    ? window.FBQueue.ALL_STAGES
+    : FALLBACK_STAGES;
+
+  function stageOptionsHtml(current) {
+    const legacy = current && !STAGES.includes(current)
+      ? `<option value="${current}" selected disabled>${current} (legacy)</option>`
+      : "";
+    return legacy + STAGES.map(s =>
+      `<option value="${s}"${current === s ? " selected" : ""}>${s}</option>`
+    ).join("");
+  }
 
   let pollTimer = null;
   let dismissedFor = null;
@@ -262,14 +289,14 @@
         dashboardUrl: "https://fanmas.vercel.app",
         igSecret: "",
         calendarUrl: "",
-        personalIgUsername: "felipeguimars",
+        personalIgUsername: "",
         fanbasisHandle: "fanbasis",
       }, r)),
       new Promise((r) => chrome.storage.local.get({ fb_bootstrap: null, fb_rep_token: null }, r)),
     ]);
     const boot = local.fb_bootstrap;
     return {
-      dashboardUrl: boot?.dashboardUrl || sync.dashboardUrl,
+      dashboardUrl: healUrl(boot?.dashboardUrl || sync.dashboardUrl),
       igSecret: sync.igSecret,
       repToken: local.fb_rep_token || "",
       calendarUrl: sync.calendarUrl,
@@ -609,7 +636,7 @@
       @keyframes fb-pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
       @keyframes fb-in { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
       #fb-tracker-card *{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
-      #fb-tracker-card select option{background:#111}
+      #fb-tracker-card select option{background:#0F1420}
       #fb-tracker-card button:active{opacity:.7}
     `;
     document.head.appendChild(s);
@@ -627,8 +654,8 @@
     card.id = "fb-tracker-card";
     card.style.cssText = [
       "position:fixed", "z-index:2147483647",
-      "width:290px", "background:#111", "border:1px solid #252525",
-      "border-radius:12px", "color:#e5e5e5", "font-size:13px",
+      "width:290px", "background:#0F1420", "border:1px solid #1A2235",
+      "border-radius:12px", "color:#E2E8F0", "font-size:13px",
       "box-shadow:0 8px 32px rgba(0,0,0,.75),0 0 0 1px rgba(255,58,105,.12)",
       "animation:fb-in .18s ease-out", "overflow:hidden",
     ].join(";");
@@ -645,19 +672,19 @@
 
   function renderHeader(card, username) {
     const h = document.createElement("div");
-    h.style.cssText = "background:#161616;padding:9px 14px;display:flex;flex-direction:column;gap:5px;border-bottom:1px solid #232323;cursor:grab;user-select:none";
+    h.style.cssText = "background:#0A0E1A;padding:9px 14px;display:flex;flex-direction:column;gap:5px;border-bottom:1px solid #1A2235;cursor:grab;user-select:none";
     const topRow = document.createElement("div");
     topRow.style.cssText = "display:flex;align-items:center;justify-content:space-between";
     topRow.innerHTML = `
       <div style="display:flex;align-items:center;gap:6px">
         <span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;background:linear-gradient(140deg,#23232f,#141419);border:1px solid #2c2c3b;flex-shrink:0"><svg width="15" height="15" viewBox="0 0 200 200"><defs><clipPath id="Lc"><rect width="100" height="200"/></clipPath><clipPath id="Rc"><rect x="100" width="100" height="200"/></clipPath><mask id="Cc"><rect width="200" height="200" fill="#fff"/><g fill="#000"><circle cx="108" cy="87" r="16"/><path d="M100,98 C98,113 88,123 74,135 C94,135 110,121 114,103 C115,99 113,96 109,95 Z"/></g></mask></defs><g mask="url(#Cc)"><g clip-path="url(#Lc)" fill="#F1567A"><polygon points="100,55 111.76,88.82 147.55,89.55 119.02,111.18 129.4,145.45 100,125 70.6,145.45 80.98,111.18 52.45,89.55 88.24,88.82"/></g><g clip-path="url(#Rc)" fill="#8FBBFB"><polygon points="100,55 111.76,88.82 147.55,89.55 119.02,111.18 129.4,145.45 100,125 70.6,145.45 80.98,111.18 52.45,89.55 88.24,88.82"/></g></g></svg></span>
         <span style="font-weight:800;color:#EAEEF7;font-size:12px;letter-spacing:-.02em">Fan<span style="color:#F1567A">Mas</span></span>
-        <span style="color:#333;font-size:12px">·</span>
-        <span style="color:#666;font-size:11px">@${username}</span>
+        <span style="color:#475569;font-size:12px">·</span>
+        <span style="color:#7C8AA8;font-size:11px">@${username}</span>
       </div>
       <div style="display:flex;align-items:center;gap:6px">
-        <button id="fb-switch-search" style="background:none;border:none;color:#444;cursor:pointer;font-size:13px;padding:0;line-height:1" title="Go to profile">🔍</button>
-        <button id="fb-close" style="background:none;border:none;color:#444;cursor:pointer;font-size:19px;padding:0;line-height:1" title="Dismiss">×</button>
+        <button id="fb-switch-search" style="background:none;border:none;color:#5A6274;cursor:pointer;font-size:13px;padding:0;line-height:1" title="Go to profile">🔍</button>
+        <button id="fb-close" style="background:none;border:none;color:#5A6274;cursor:pointer;font-size:19px;padding:0;line-height:1" title="Dismiss">×</button>
       </div>
     `;
     h.appendChild(topRow);
@@ -667,10 +694,10 @@
     searchRow.style.cssText = "display:none;gap:4px";
     const searchInput = document.createElement("input");
     searchInput.placeholder = "@handle or name…";
-    searchInput.style.cssText = "flex:1;background:#0f0f12;border:1px solid #2a2a35;border-radius:6px;color:#ddd;font-size:11px;padding:4px 8px;outline:none";
+    searchInput.style.cssText = "flex:1;background:#0A0E1A;border:1px solid #2A3554;border-radius:6px;color:#CBD5E1;font-size:11px;padding:4px 8px;outline:none";
     const goBtn = document.createElement("button");
     goBtn.textContent = "Go";
-    goBtn.style.cssText = "background:#FF3A69;border:none;border-radius:6px;color:#fff;font-size:11px;font-weight:600;padding:4px 10px;cursor:pointer";
+    goBtn.style.cssText = "background:transparent;border:1px solid #FF3A69;border-radius:6px;color:#FF3A69;font-size:11px;font-weight:600;padding:4px 10px;cursor:pointer";
     searchRow.appendChild(searchInput);
     searchRow.appendChild(goBtn);
     h.appendChild(searchRow);
@@ -769,6 +796,23 @@
         ? (personalIgUsername || "").replace(/^@/, "")
         : (fbH || "fanbasis").replace(/^@/, "");
 
+      // Personal IG with no handle set: there's nothing to switch to. Don't open
+      // IG's account switcher (it would target a foreign account). Show an inline
+      // note pointing the rep at Settings and stop here.
+      if (channel === "ig_personal" && !target) {
+        clearPendingDm();
+        b.style.display = "none";
+        const note = document.createElement("div");
+        note.style.cssText = "padding:12px 14px";
+        note.innerHTML = `
+          <div id="fb-switch-status" style="font-size:11px;color:#3b82f6;background:#0f172a;border:1px solid #1e3a5f;border-radius:6px;padding:8px 10px;line-height:1.5">
+            Set your personal Instagram in the dashboard → <strong style="color:#E2E8F0">Settings → Extension</strong> to DM from your own account.
+          </div>
+        `;
+        card.appendChild(note);
+        return;
+      }
+
       // Skip the switch only on a fresh account signal (Contract B) or live DOM
       // detection — a stale activeIgAccount must not be trusted to skip the prompt
       const currentAcct = (freshActiveIgAccount(activeIgAccount, activeIgAccountTs) || detectCurrentIgAccountFromDom() || "").toLowerCase();
@@ -798,19 +842,19 @@
       const targetLabel = target ? `@${target}` : "your other account";
 
       prompt.innerHTML = `
-        <div style="font-size:11px;font-weight:700;color:#e5e5e5;margin-bottom:8px">Switch to ${targetLabel}</div>
-        <div style="background:#0a0a10;border:1px solid #1e1e2a;border-radius:7px;padding:8px 10px;margin-bottom:8px">
+        <div style="font-size:11px;font-weight:700;color:#E2E8F0;margin-bottom:8px">Switch to ${targetLabel}</div>
+        <div style="background:#0A0E1A;border:1px solid #1A2235;border-radius:7px;padding:8px 10px;margin-bottom:8px">
           <div style="display:flex;align-items:baseline;gap:7px;margin-bottom:4px">
             <span style="background:#FF3A69;color:#fff;font-size:8px;font-weight:700;border-radius:50%;min-width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0">1</span>
-            <span style="font-size:11px;color:#94a3b8">In Instagram, click <strong style="color:#e5e5e5">≡ More</strong> at the bottom of the left sidebar</span>
+            <span style="font-size:11px;color:#94a3b8">In Instagram, click <strong style="color:#E2E8F0">≡ More</strong> at the bottom of the left sidebar</span>
           </div>
           <div style="display:flex;align-items:baseline;gap:7px;margin-bottom:4px">
             <span style="background:#FF3A69;color:#fff;font-size:8px;font-weight:700;border-radius:50%;min-width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0">2</span>
-            <span style="font-size:11px;color:#94a3b8">Select <strong style="color:#e5e5e5">Switch accounts</strong></span>
+            <span style="font-size:11px;color:#94a3b8">Select <strong style="color:#E2E8F0">Switch accounts</strong></span>
           </div>
           <div style="display:flex;align-items:baseline;gap:7px">
             <span style="background:#FF3A69;color:#fff;font-size:8px;font-weight:700;border-radius:50%;min-width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0">3</span>
-            <span style="font-size:11px;color:#94a3b8">Choose <strong style="color:#e5e5e5">${targetLabel}</strong> — page reloads, DM flow continues automatically</span>
+            <span style="font-size:11px;color:#94a3b8">Choose <strong style="color:#E2E8F0">${targetLabel}</strong> — page reloads, DM flow continues automatically</span>
           </div>
         </div>
         <div id="fb-switch-status" style="font-size:10px;color:#3b82f6;background:#0f172a;border:1px solid #1e3a5f;border-radius:6px;padding:6px 8px;margin-bottom:8px;display:none">
@@ -876,7 +920,7 @@
       // "I've Switched" — validates account then continues
       const doneBtn = document.createElement("button");
       doneBtn.textContent = "✓ I've Switched — Continue";
-      doneBtn.style.cssText = "width:100%;background:#0f2540;border:1px solid #22c55e;border-radius:8px;color:#4ade80;font-size:11px;font-weight:600;padding:9px;cursor:pointer;margin-bottom:6px";
+      doneBtn.style.cssText = "width:100%;background:#0d2b0d;border:1px solid #166534;border-radius:8px;color:#4ade80;font-size:11px;font-weight:600;padding:9px;cursor:pointer;margin-bottom:6px";
       doneBtn.addEventListener("click", () => {
         doneBtn.disabled = true;
         doneBtn.textContent = "Checking account…";
@@ -899,8 +943,8 @@
               doneBtn.style.color = "#ef4444";
               setTimeout(() => {
                 doneBtn.textContent = "✓ I've Switched — Continue";
-                doneBtn.style.background = "#0f2540";
-                doneBtn.style.borderColor = "#22c55e";
+                doneBtn.style.background = "#0d2b0d";
+                doneBtn.style.borderColor = "#166534";
                 doneBtn.style.color = "#4ade80";
                 doneBtn.disabled = false;
               }, 2500);
@@ -916,7 +960,7 @@
       const sendNowBtn = document.createElement("button");
       // Label the account this will actually send from — never imply the target
       sendNowBtn.textContent = currentAcct ? `Skip — send as @${currentAcct}` : "Skip — send from unknown account";
-      sendNowBtn.style.cssText = "flex:1;background:#161616;border:1px solid #252525;border-radius:8px;color:#555;font-size:10px;font-weight:600;padding:7px 4px;cursor:pointer";
+      sendNowBtn.style.cssText = "flex:1;background:#151B2E;border:1px solid #1A2235;border-radius:8px;color:#5A6274;font-size:10px;font-weight:600;padding:7px 4px;cursor:pointer";
       sendNowBtn.addEventListener("click", () => {
         cleanup();
         clearPendingDm();
@@ -928,7 +972,7 @@
 
       const cancelBtn = document.createElement("button");
       cancelBtn.textContent = "✕";
-      cancelBtn.style.cssText = "background:#161616;border:1px solid #252525;border-radius:8px;color:#555;font-size:13px;font-weight:600;padding:7px 10px;cursor:pointer;flex-shrink:0";
+      cancelBtn.style.cssText = "background:#151B2E;border:1px solid #1A2235;border-radius:8px;color:#5A6274;font-size:13px;font-weight:600;padding:7px 10px;cursor:pointer;flex-shrink:0";
       cancelBtn.addEventListener("click", () => {
         cleanup();
         clearPendingDm();
@@ -962,12 +1006,17 @@
     } catch { /* ignore */ }
   }
 
+  // F4: only the channels this extension actually records — matches the
+  // sidepanel's 2 chips. LinkedIn/Email have no tracking; historic manual
+  // entries in outreach_channels still render (dimmed, "manual") below.
   const CH_DEFS = [
     { k: "ig_fanbasis", icon: "📸", label: "FanBasis" },
     { k: "ig_personal", icon: "📸", label: "Personal" },
-    { k: "linkedin",    icon: "💼", label: "LinkedIn" },
-    { k: "email",       icon: "✉️", label: "Email" },
   ];
+  const MANUAL_CH_DEFS = {
+    linkedin: { icon: "💼", label: "LinkedIn" },
+    email:    { icon: "✉️", label: "Email" },
+  };
 
   function renderChannelTracker(container, channels) {
     const chs = channels || {};
@@ -982,9 +1031,19 @@
         pill.style.cssText = "font-size:10px;padding:2px 7px;border-radius:6px;background:#0d2b0d;border:1px solid #166534;color:#4ade80;white-space:nowrap";
         pill.textContent = d.icon + " " + d.label + " ✓ " + chTime(info.sentAt);
       } else {
-        pill.style.cssText = "font-size:10px;padding:2px 7px;border-radius:6px;background:#111;border:1px solid #252525;color:#3a3a3a;white-space:nowrap";
+        pill.style.cssText = "font-size:10px;padding:2px 7px;border-radius:6px;background:#0F1420;border:1px solid #1A2235;color:#475569;white-space:nowrap";
         pill.textContent = d.icon + " " + d.label;
       }
+      row.appendChild(pill);
+    }
+    // Historic manual channels (linkedin/email) — shown only if data exists
+    for (const [k, d] of Object.entries(MANUAL_CH_DEFS)) {
+      const info = chs[k];
+      if (!info?.sentAt) continue;
+      const pill = document.createElement("div");
+      pill.setAttribute("data-ch", k);
+      pill.style.cssText = "font-size:10px;padding:2px 7px;border-radius:6px;background:#0d2b0d;border:1px solid #166534;color:#4ade80;white-space:nowrap;opacity:.65";
+      pill.textContent = d.icon + " " + d.label + " ✓ " + chTime(info.sentAt) + " · manual";
       row.appendChild(pill);
     }
     container.appendChild(row);
@@ -1100,18 +1159,18 @@
     const st = document.createElement("style");
     st.id = "fb-slot-picker-styles";
     st.textContent = `
-      .fbp-day{font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;color:#7c8aa8;margin:12px 0 8px;display:flex;align-items:center;gap:8px}
+      .fbp-day{font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;color:#7C8AA8;margin:12px 0 8px;display:flex;align-items:center;gap:8px}
       .fbp-day:first-child{margin-top:2px}
-      .fbp-day::after{content:"";flex:1;height:1px;background:#1e2436}
+      .fbp-day::after{content:"";flex:1;height:1px;background:#1A2235}
       .fbp-chips{display:flex;flex-wrap:wrap;gap:6px}
-      .fbp-chip{font:600 12px/1 ui-monospace,Menlo,monospace;padding:8px 11px;border-radius:9px;background:#151b2e;border:1px solid #26314a;color:#c6d2e8;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
+      .fbp-chip{font:600 12px/1 ui-monospace,Menlo,monospace;padding:8px 11px;border-radius:9px;background:#151B2E;border:1px solid #2A3554;color:#c6d2e8;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
       .fbp-chip:hover{border-color:#3a4668;color:#e7ecf5}
       .fbp-chip.sel{background:#FF3A69;border-color:#FF3A69;color:#fff}
-      .fbp-status{font:500 10.5px/1.4 ui-monospace,Menlo,monospace;color:#5a6274;margin:12px 0 10px;text-align:center}
-      .fbp-empty{text-align:center;padding:20px 8px;color:#7c8aa8}
+      .fbp-status{font:500 10.5px/1.4 ui-monospace,Menlo,monospace;color:#5A6274;margin:12px 0 10px;text-align:center}
+      .fbp-empty{text-align:center;padding:20px 8px;color:#7C8AA8}
       .fbp-empty .big{display:block;font-size:13px;font-weight:700;color:#c6d2e8;margin-bottom:4px}
       .fbp-btn{border-radius:8px;font:600 12px/1 -apple-system,BlinkMacSystemFont,sans-serif;padding:9px;cursor:pointer;transition:filter .12s,border-color .12s,color .12s}
-      .fbp-btn-quiet{flex:1;background:transparent;border:1px solid #2a3350;color:#9aa7bd}
+      .fbp-btn-quiet{flex:1;background:transparent;border:1px solid #2A3554;color:#9aa7bd}
       .fbp-btn-quiet:hover{border-color:#3a4668;color:#c6d2e8}
       .fbp-btn-primary{flex:2;background:#FF3A69;border:1px solid #FF3A69;color:#fff}
       .fbp-btn-primary:hover{filter:brightness(1.08)}
@@ -1197,11 +1256,11 @@
       <span style="width:7px;height:7px;border-radius:50%;background:#4285F4;display:inline-block;flex-shrink:0"></span>
       <span style="font-size:10px;font-weight:700;color:#93c5fd;letter-spacing:.04em">${slotMins}-min slots for <span style="color:#e2e8f0">${leadDisplayName}</span></span>
       <select class="fb-tz-select" title="Show + offer times in this zone (window stays Eastern)"
-        style="margin-left:auto;flex:0 0 auto;background:#111118;border:1px solid #1e1e2e;border-radius:6px;color:#e2e8f0;font-size:11px;font-weight:600;padding:5px 6px;outline:none;cursor:pointer">
+        style="margin-left:auto;flex:0 0 auto;background:#151B2E;border:1px solid #2A3554;border-radius:6px;color:#e2e8f0;font-size:11px;font-weight:600;padding:5px 6px;outline:none;cursor:pointer">
         ${FB_TZS.map(t => `<option value="${t.id}" ${t.id === displayTz ? "selected" : ""}>${t.label}</option>`).join("")}
       </select>
       <button class="fb-late-btn" title="Calls normally end by 6:15 PM — allow up to 8 PM"
-        style="flex-shrink:0;background:${lateOn ? "#2a1f38" : "#111118"};border:1px solid ${lateOn ? "#7c3aed" : "#1e1e2e"};border-radius:6px;color:${lateOn ? "#c4b5fd" : "#6e7280"};font-size:10px;font-weight:600;padding:3px 7px;cursor:pointer">🌙 Late</button>
+        style="flex-shrink:0;background:${lateOn ? "#0f2540" : "#151B2E"};border:1px solid ${lateOn ? "#1d4ed8" : "#2A3554"};border-radius:6px;color:${lateOn ? "#93c5fd" : "#5A6274"};font-size:10px;font-weight:600;padding:3px 7px;cursor:pointer">🌙 Late</button>
     `;
     hdr.querySelector(".fb-tz-select").addEventListener("change", (e) => {
       const tzId = e.target.value;
@@ -1222,8 +1281,8 @@
       const aeRow = document.createElement("div");
       aeRow.style.cssText = "display:flex;align-items:center;gap:7px;margin-bottom:8px";
       aeRow.innerHTML = `
-        <span style="font-size:10px;color:#6e7280;flex-shrink:0">Call with</span>
-        <select class="fb-ae-select" style="flex:1;background:#111118;border:1px solid #1e1e2e;border-radius:6px;color:#e2e8f0;font-size:11px;font-weight:600;padding:5px 7px;outline:none;cursor:pointer">
+        <span style="font-size:10px;color:#5A6274;flex-shrink:0">Call with</span>
+        <select class="fb-ae-select" style="flex:1;background:#151B2E;border:1px solid #2A3554;border-radius:6px;color:#e2e8f0;font-size:11px;font-weight:600;padding:5px 7px;outline:none;cursor:pointer">
           <option value="" ${!currentAeId ? "selected" : ""}>Me (my calendar)</option>
           ${aes.map(a => `<option value="${a.id}" ${a.id === currentAeId ? "selected" : ""}>${a.name}</option>`).join("")}
         </select>`;
@@ -1351,7 +1410,7 @@
       if (!chosen.length) return;
       btnRow.style.display = "none";
 
-      const iStyle = "background:#0f1420;border:1px solid #26314a;border-radius:8px;color:#c6d2e8;font-size:12px;padding:8px 10px;outline:none;width:100%;box-sizing:border-box";
+      const iStyle = "background:#0F1420;border:1px solid #2A3554;border-radius:8px;color:#c6d2e8;font-size:12px;padding:8px 10px;outline:none;width:100%;box-sizing:border-box";
       const form = document.createElement("div");
       form.style.cssText = "display:flex;flex-direction:column;gap:7px;margin-top:8px";
 
@@ -1498,7 +1557,7 @@
 
     let activeIdx = 0;
 
-    const acctColor = channel === "ig_fanbasis" ? "#22c55e" : channel === "ig_personal" ? "#3b82f6" : "#888";
+    const acctColor = channel === "ig_fanbasis" ? "#22c55e" : channel === "ig_personal" ? "#3b82f6" : "#94a3b8";
     const acctLabel = channel === "ig_fanbasis" ? "FanBasis account" : channel === "ig_personal" ? "Personal account" : "DM";
 
     b.style.display = "none";
@@ -1512,23 +1571,23 @@
     hdr.innerHTML = `
       <div style="display:flex;align-items:center;gap:5px;min-width:0">
         <span style="width:6px;height:6px;border-radius:50%;background:${acctColor};display:inline-block;flex-shrink:0"></span>
-        <span style="font-size:10px;font-weight:600;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${firstName}</span>
-        <span style="font-size:9px;color:#333;white-space:nowrap">· ${acctLabel}</span>
+        <span style="font-size:10px;font-weight:600;color:#CBD5E1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${firstName}</span>
+        <span style="font-size:9px;color:#475569;white-space:nowrap">· ${acctLabel}</span>
       </div>
-      ${stage !== "New" ? `<span style="font-size:9px;color:#888;background:#1a1a1a;border:1px solid #252525;padding:1px 7px;border-radius:5px;flex-shrink:0">${stage}</span>` : ""}
+      ${stage !== "New" ? `<span style="font-size:9px;color:#94a3b8;background:#151B2E;border:1px solid #1A2235;padding:1px 7px;border-radius:5px;flex-shrink:0">${stage}</span>` : ""}
     `;
     preview.appendChild(hdr);
 
     // AI badge shown while loading
     const aiBadge = document.createElement("div");
-    aiBadge.style.cssText = "display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:9px;color:#7c3aed";
-    aiBadge.innerHTML = `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#7c3aed;animation:fbPulse 1s ease-in-out infinite"></span>✨ Generating AI opener…`;
+    aiBadge.style.cssText = "display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:9px;color:#FF3A69";
+    aiBadge.innerHTML = `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#FF3A69;animation:fb-pulse 1s ease-in-out infinite"></span>✨ Generating AI opener…`;
     preview.appendChild(aiBadge);
 
     const ta = document.createElement("textarea");
     ta.value = scripts[0].text;
     ta.placeholder = "Loading…";
-    ta.style.cssText = "width:100%;min-height:90px;max-height:220px;background:#0f0f12;border:1px solid #2a2a35;border-radius:8px;color:#ddd;font-size:12px;line-height:1.55;padding:8px 10px;resize:none;font-family:inherit;outline:none;box-sizing:border-box;overflow-y:auto;transition:border-color .2s";
+    ta.style.cssText = "width:100%;min-height:90px;max-height:220px;background:#0A0E1A;border:1px solid #2A3554;border-radius:8px;color:#CBD5E1;font-size:12px;line-height:1.55;padding:8px 10px;resize:none;font-family:inherit;outline:none;box-sizing:border-box;overflow-y:auto;transition:border-color .2s";
 
     function autoResizeTa() {
       ta.style.height = "auto";
@@ -1551,9 +1610,9 @@
       function setPillActive(pills, idx) {
         pills.forEach((p, i) => {
           const on = i === idx;
-          p.style.borderColor = on ? "#FF3A69" : "#1e1e2a";
+          p.style.borderColor = on ? "#FF3A69" : "#1A2235";
           p.style.background = on ? "#FF3A6922" : "transparent";
-          p.style.color = on ? "#FF3A69" : "#444";
+          p.style.color = on ? "#FF3A69" : "#5A6274";
         });
       }
 
@@ -1561,7 +1620,7 @@
         const pill = document.createElement("button");
         pill.textContent = s.label;
         pill.title = s.text;
-        pill.style.cssText = "font-size:9px;padding:2px 7px;border-radius:5px;cursor:pointer;border:1px solid #1e1e2a;background:transparent;color:#444;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px";
+        pill.style.cssText = "font-size:9px;padding:2px 7px;border-radius:5px;cursor:pointer;border:1px solid #1A2235;background:transparent;color:#5A6274;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px";
         pill.addEventListener("click", () => {
           activeIdx = i;
           ta.value = s.text;
@@ -1602,9 +1661,9 @@
         })
         .then(data => {
           if (!data?.opener) { aiBadge.remove(); return; }
-          aiBadge.innerHTML = `<span style="color:#7c3aed">✨</span> AI opener`;
+          aiBadge.innerHTML = `<span style="color:#FF3A69">✨</span> AI opener`;
           aiBadge.style.animation = "none";
-          ta.style.borderColor = "#7c3aed44";
+          ta.style.borderColor = "#FF3A6944";
           const aiScripts = [{ label: "✨ AI", text: data.opener }, ...scripts];
           if (!sent && !clicked) {
             ta.value = aiScripts[0].text;
@@ -1688,9 +1747,9 @@
       // Pending: wait for the network to confirm the send actually happened
       confirmBtn.textContent = "⏳ Waiting for send…";
       confirmBtn.disabled = true;
-      confirmBtn.style.background = "#1a1a1a";
-      confirmBtn.style.border = "1px solid #333";
-      confirmBtn.style.color = "#888";
+      confirmBtn.style.background = "#151B2E";
+      confirmBtn.style.border = "1px solid #2A3554";
+      confirmBtn.style.color = "#94a3b8";
       confirmBtn.style.cursor = "default";
 
       document.addEventListener("ig_dm_sent", onDmSent);
@@ -1711,7 +1770,7 @@
 
     const backBtn = document.createElement("button");
     backBtn.textContent = "← Back";
-    backBtn.style.cssText = "background:#161616;border:1px solid #252525;border-radius:8px;color:#94a3b8;font-size:12px;font-weight:600;padding:9px 12px;cursor:pointer;flex-shrink:0";
+    backBtn.style.cssText = "background:#151B2E;border:1px solid #1A2235;border-radius:8px;color:#94a3b8;font-size:12px;font-weight:600;padding:9px 12px;cursor:pointer;flex-shrink:0";
     backBtn.addEventListener("click", () => {
       cleanupSendWatch();
       preview.remove();
@@ -1819,7 +1878,7 @@
       pillRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-bottom:5px";
 
       const pill = document.createElement("div");
-      pill.style.cssText = "display:flex;align-items:center;gap:5px;font-size:10px;color:#555";
+      pill.style.cssText = "display:flex;align-items:center;gap:5px;font-size:10px;color:#5A6274";
       pill.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:${acctColor};display:inline-block;flex-shrink:0"></span>${acctLabel}`;
       pillRow.appendChild(pill);
 
@@ -1839,7 +1898,11 @@
 
       const dmBtn = document.createElement("button");
       dmBtn.textContent = "📨 Send DM";
-      dmBtn.style.cssText = "width:100%;background:#FF3A69;border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;padding:9px;cursor:pointer";
+      // V1: pink primary only where DM is the main CTA (saved/complete views);
+      // quiet on the unsaved view, where "＋ Save to Leads" is the one primary.
+      dmBtn.style.cssText = lead
+        ? "width:100%;background:#FF3A69;border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;padding:9px;cursor:pointer"
+        : "width:100%;background:#151B2E;border:1px solid #2A3554;border-radius:8px;color:#94a3b8;font-size:12px;font-weight:600;padding:9px;cursor:pointer";
 
       // Unknown account → block Send until the rep confirms which one they're on,
       // so a DM is never silently sent (and tagged) as FanBasis by default
@@ -1860,7 +1923,7 @@
         function mkPick(label, ch, dotColor) {
           const pb = document.createElement("button");
           pb.textContent = label;
-          pb.style.cssText = "flex:1;background:#161616;border:1px solid #2a2a35;border-radius:6px;color:#94a3b8;font-size:10px;font-weight:600;padding:5px 4px;cursor:pointer";
+          pb.style.cssText = "flex:1;background:#151B2E;border:1px solid #2A3554;border-radius:6px;color:#94a3b8;font-size:10px;font-weight:600;padding:5px 4px;cursor:pointer";
           pb.addEventListener("click", () => {
             firstCh = ch;
             notice.remove();
@@ -1904,7 +1967,7 @@
             const nextUrl = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
             const nextBtn = document.createElement("button");
             nextBtn.textContent = `Next → @${nextLead.ig_username || nextLead.name}`;
-            nextBtn.style.cssText = "width:100%;background:#161616;border:1px solid #3b82f6;border-radius:7px;color:#93c5fd;font-size:11px;font-weight:600;padding:7px;cursor:pointer";
+            nextBtn.style.cssText = "width:100%;background:#151B2E;border:1px solid #3b82f6;border-radius:7px;color:#93c5fd;font-size:11px;font-weight:600;padding:7px;cursor:pointer";
             nextBtn.addEventListener("click", () => { window.location.href = nextUrl; });
             b.appendChild(nextBtn);
           }
@@ -1952,7 +2015,9 @@
       // Fallback if settings load fails — show plain Send DM button
       const dmBtn = document.createElement("button");
       dmBtn.textContent = "📨 Send DM";
-      dmBtn.style.cssText = "width:100%;background:#FF3A69;border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;padding:9px;cursor:pointer";
+      dmBtn.style.cssText = lead
+        ? "width:100%;background:#FF3A69;border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;padding:9px;cursor:pointer"
+        : "width:100%;background:#151B2E;border:1px solid #2A3554;border-radius:8px;color:#94a3b8;font-size:12px;font-weight:600;padding:9px;cursor:pointer";
       dmBtn.addEventListener("click", () => {
         showDmPreview(card, b, username, opener, { channel: "ig_fanbasis", lead, leadId: lead?.id, dashboardUrl });
       });
@@ -1967,7 +2032,7 @@
     renderHeader(card, username);
     const b = document.createElement("div");
     b.style.cssText = "padding:12px 14px";
-    b.innerHTML = `<div style="display:flex;align-items:center;gap:8px;color:#555"><div style="width:7px;height:7px;background:#FF3A69;border-radius:50%;animation:fb-pulse 1s infinite;flex-shrink:0"></div><span>Checking…</span></div>`;
+    b.innerHTML = `<div style="display:flex;align-items:center;gap:8px;color:#5A6274"><div style="width:7px;height:7px;background:#FF3A69;border-radius:50%;animation:fb-pulse 1s infinite;flex-shrink:0"></div><span>Checking…</span></div>`;
     card.appendChild(b);
   }
 
@@ -1998,17 +2063,17 @@
 
     if (suggestion) {
       const scriptBox = document.createElement("div");
-      scriptBox.style.cssText = "background:#0f0f12;border:1px solid #1e1e28;border-radius:8px;padding:9px 10px;position:relative";
+      scriptBox.style.cssText = "background:#0A0E1A;border:1px solid #1A2235;border-radius:8px;padding:9px 10px;position:relative";
       const chipHtml = suggestion.stack.slice(0, 3)
-        .map(s => `<span style="font-size:9px;background:#1a1a22;border:1px solid #2a2a35;color:#555;padding:1px 6px;border-radius:6px">${s}</span>`)
+        .map(s => `<span style="font-size:9px;background:#1A2235;border:1px solid #2A3554;color:#5A6274;padding:1px 6px;border-radius:6px">${s}</span>`)
         .join("");
       scriptBox.innerHTML = `
         <div style="display:flex;align-items:center;gap:5px;margin-bottom:5px;flex-wrap:wrap">
-          <span style="font-size:9px;color:#3b3b50;text-transform:uppercase;letter-spacing:.5px">Quick Script</span>
+          <span style="font-size:9px;color:#475569;text-transform:uppercase;letter-spacing:.5px">Quick Script</span>
           ${chipHtml}
         </div>
-        <p id="fb-quick-text" style="margin:0;color:#bbb;font-size:12px;line-height:1.55;white-space:pre-wrap;padding-right:54px">${suggestion.text}</p>
-        <button id="fb-copy-quick" style="position:absolute;top:8px;right:8px;background:#FF3A69;border:none;border-radius:5px;color:#fff;font-size:10px;font-weight:600;padding:3px 9px;cursor:pointer">Copy</button>
+        <p id="fb-quick-text" style="margin:0;color:#CBD5E1;font-size:12px;line-height:1.55;white-space:pre-wrap;padding-right:54px">${suggestion.text}</p>
+        <button id="fb-copy-quick" style="position:absolute;top:8px;right:8px;background:#1A2235;border:1px solid #2A3554;border-radius:5px;color:#94a3b8;font-size:10px;font-weight:600;padding:3px 9px;cursor:pointer">Copy</button>
       `;
       b.appendChild(scriptBox);
       scriptBox.querySelector("#fb-copy-quick").addEventListener("click", function () {
@@ -2051,25 +2116,25 @@
       if (!nextLead) return;
 
       const navWrap = document.createElement("div");
-      navWrap.style.cssText = "margin-top:8px;border-top:1px solid #1a1a22;padding-top:8px";
+      navWrap.style.cssText = "margin-top:8px;border-top:1px solid #1A2235;padding-top:8px";
 
       // Position counter + snooze strip
       const controlRow = document.createElement("div");
       controlRow.style.cssText = "display:flex;align-items:center;gap:5px;margin-bottom:6px";
       if (pos !== -1) {
         const posLabel = document.createElement("span");
-        posLabel.style.cssText = "font-size:10px;color:#3a3a50;font-variant-numeric:tabular-nums;flex-shrink:0";
+        posLabel.style.cssText = "font-size:10px;color:#475569;font-variant-numeric:tabular-nums;flex-shrink:0";
         posLabel.textContent = `${pos + 1} / ${queue.length}`;
         controlRow.appendChild(posLabel);
       }
       const snoozeLabel = document.createElement("span");
-      snoozeLabel.style.cssText = "font-size:10px;color:#3a3a50;margin-left:auto;flex-shrink:0";
+      snoozeLabel.style.cssText = "font-size:10px;color:#475569;margin-left:auto;flex-shrink:0";
       snoozeLabel.textContent = "Snooze:";
       controlRow.appendChild(snoozeLabel);
       for (const [label, days] of [["1d", 1], ["3d", 3], ["1w", 7]]) {
         const sb = document.createElement("button");
         sb.textContent = `+${label}`;
-        sb.style.cssText = "background:#111;border:1px solid #252525;border-radius:4px;color:#444;font-size:10px;font-weight:600;padding:2px 6px;cursor:pointer";
+        sb.style.cssText = "background:#0F1420;border:1px solid #1A2235;border-radius:4px;color:#5A6274;font-size:10px;font-weight:600;padding:2px 6px;cursor:pointer";
         sb.addEventListener("click", async () => {
           // C4: server-side snooze (background does the authed POST)
           const until = new Date(Date.now() + days * 24 * 3600000).toISOString();
@@ -2085,14 +2150,14 @@
       btnRow.style.cssText = "display:flex;gap:5px";
       const skipBtn = document.createElement("button");
       skipBtn.textContent = "Skip";
-      skipBtn.style.cssText = "flex:1;background:#111;border:1px solid #252525;border-radius:6px;color:#555;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
+      skipBtn.style.cssText = "flex:1;background:#0F1420;border:1px solid #1A2235;border-radius:6px;color:#5A6274;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
       skipBtn.addEventListener("click", () => {
         dismissedFor = username;
         window.location.href = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
       });
       const nextBtn = document.createElement("button");
       nextBtn.textContent = `Next → @${nextLead.ig_username || nextLead.name}`;
-      nextBtn.style.cssText = "flex:2;background:#161616;border:1px solid #3b82f6;border-radius:6px;color:#93c5fd;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
+      nextBtn.style.cssText = "flex:2;background:#151B2E;border:1px solid #3b82f6;border-radius:6px;color:#93c5fd;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
       nextBtn.addEventListener("click", () => {
         window.location.href = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
       });
@@ -2128,17 +2193,17 @@
 
     if (suggestion) {
       const scriptBox = document.createElement("div");
-      scriptBox.style.cssText = "background:#0f0f12;border:1px solid #1e1e28;border-radius:8px;padding:9px 10px;margin-bottom:10px;position:relative";
+      scriptBox.style.cssText = "background:#0A0E1A;border:1px solid #1A2235;border-radius:8px;padding:9px 10px;margin-bottom:10px;position:relative";
       const chipHtml = suggestion.stack.slice(0, 3)
-        .map(s => `<span style="font-size:9px;background:#1a1a22;border:1px solid #2a2a35;color:#555;padding:1px 6px;border-radius:6px">${s}</span>`)
+        .map(s => `<span style="font-size:9px;background:#1A2235;border:1px solid #2A3554;color:#5A6274;padding:1px 6px;border-radius:6px">${s}</span>`)
         .join("");
       scriptBox.innerHTML = `
         <div style="display:flex;align-items:center;gap:5px;margin-bottom:5px;flex-wrap:wrap">
-          <span style="font-size:9px;color:#3b3b50;text-transform:uppercase;letter-spacing:.5px">Suggested Message</span>
+          <span style="font-size:9px;color:#475569;text-transform:uppercase;letter-spacing:.5px">Suggested Message</span>
           ${chipHtml}
         </div>
-        <p style="margin:0;color:#bbb;font-size:12px;line-height:1.55;white-space:pre-wrap;padding-right:54px">${suggestion.text}</p>
-        <button id="fb-copy-sugg" style="position:absolute;top:8px;right:8px;background:#FF3A69;border:none;border-radius:5px;color:#fff;font-size:10px;font-weight:600;padding:3px 9px;cursor:pointer">Copy</button>
+        <p style="margin:0;color:#CBD5E1;font-size:12px;line-height:1.55;white-space:pre-wrap;padding-right:54px">${suggestion.text}</p>
+        <button id="fb-copy-sugg" style="position:absolute;top:8px;right:8px;background:#1A2235;border:1px solid #2A3554;border-radius:5px;color:#94a3b8;font-size:10px;font-weight:600;padding:3px 9px;cursor:pointer">Copy</button>
       `;
       b.appendChild(scriptBox);
       scriptBox.querySelector("#fb-copy-sugg").addEventListener("click", function () {
@@ -2149,7 +2214,7 @@
       });
     } else {
       const noScript = document.createElement("p");
-      noScript.style.cssText = "margin:0 0 10px;color:#555;font-size:11px";
+      noScript.style.cssText = "margin:0 0 10px;color:#5A6274;font-size:11px";
       noScript.textContent = "Saved — open dashboard to view research when ready.";
       b.appendChild(noScript);
     }
@@ -2159,23 +2224,23 @@
       savedActions.style.cssText = "display:flex;gap:5px;margin-top:6px";
       const savedDqBtn = document.createElement("button");
       savedDqBtn.textContent = "✗ DQ";
-      savedDqBtn.style.cssText = "flex:1;background:#161616;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
+      savedDqBtn.style.cssText = "flex:1;background:#151B2E;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
       savedDqBtn.addEventListener("click", () => {
         if (savedDqBtn.dataset.undoing) {
           clearTimeout(Number(savedDqBtn.dataset.timer));
           delete savedDqBtn.dataset.undoing;
           savedDqBtn.textContent = "✗ DQ";
-          savedDqBtn.style.cssText = "flex:1;background:#161616;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
+          savedDqBtn.style.cssText = "flex:1;background:#151B2E;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
           return;
         }
         savedDqBtn.dataset.undoing = "1";
         savedDqBtn.textContent = "↩ Undo";
-        savedDqBtn.style.cssText = "flex:1;background:#1a1a1a;border:1px solid #444;border-radius:6px;color:#888;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
+        savedDqBtn.style.cssText = "flex:1;background:#151B2E;border:1px solid #5A6274;border-radius:6px;color:#94a3b8;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
         savedDqBtn.dataset.timer = setTimeout(async () => {
           delete savedDqBtn.dataset.undoing;
           savedDqBtn.textContent = "DQ'd"; savedDqBtn.disabled = true;
           const r = await chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "DQ" } }).catch(() => null);
-          if (r?.ok === false) { savedDqBtn.textContent = "✗ DQ"; savedDqBtn.disabled = false; savedDqBtn.style.cssText = "flex:1;background:#161616;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:5px;cursor:pointer"; return; }
+          if (r?.ok === false) { savedDqBtn.textContent = "✗ DQ"; savedDqBtn.disabled = false; savedDqBtn.style.cssText = "flex:1;background:#151B2E;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:5px;cursor:pointer"; return; }
           navigateToNextLead(b, username, lead.id, dashboardUrl);
         }, 4000);
       });
@@ -2253,10 +2318,8 @@
       const savedStageRow = document.createElement("div");
       savedStageRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:6px";
       const sc2 = stageColor(lead.stage);
-      const savedStageOptions = STAGES.map(s =>
-        `<option value="${s}"${lead.stage === s ? " selected" : ""}>${s}</option>`
-      ).join("");
-      savedStageRow.innerHTML = `<select id="fb-stage-saved" style="flex:1;background:#1a1a1a;border:1px solid ${sc2}55;border-radius:7px;color:${sc2};font-size:12px;font-weight:600;padding:5px 8px;cursor:pointer">${savedStageOptions}</select>`;
+      const savedStageOptions = stageOptionsHtml(lead.stage);
+      savedStageRow.innerHTML = `<select id="fb-stage-saved" style="flex:1;background:#151B2E;border:1px solid ${sc2}55;border-radius:7px;color:${sc2};font-size:12px;font-weight:600;padding:5px 8px;cursor:pointer">${savedStageOptions}</select>`;
       b.appendChild(savedStageRow);
       savedStageRow.querySelector("select").addEventListener("change", function () {
         this.style.color = stageColor(this.value);
@@ -2283,7 +2346,7 @@
             const nextUrl = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
             const nextBtn = document.createElement("button");
             nextBtn.textContent = `Next → @${nextLead.ig_username || nextLead.name}`;
-            nextBtn.style.cssText = "width:100%;margin-top:6px;background:#161616;border:1px solid #3b82f6;border-radius:7px;color:#93c5fd;font-size:11px;font-weight:600;padding:7px;cursor:pointer";
+            nextBtn.style.cssText = "width:100%;margin-top:6px;background:#151B2E;border:1px solid #3b82f6;border-radius:7px;color:#93c5fd;font-size:11px;font-weight:600;padding:7px;cursor:pointer";
             nextBtn.addEventListener("click", () => { window.location.href = nextUrl; });
             b.appendChild(nextBtn);
           }
@@ -2301,15 +2364,15 @@
     const b = document.createElement("div");
     b.style.cssText = "padding:12px 14px";
     b.innerHTML = `
-      <p style="margin:0 0 8px;color:#888;font-size:12px">Research failed. Open dashboard to retry.</p>
+      <p style="margin:0 0 8px;color:#94a3b8;font-size:12px">Research failed. Open dashboard to retry.</p>
       <a href="${dashboardUrl}" target="_blank" style="display:block;text-align:center;color:#FF3A69;font-size:12px;font-weight:600;text-decoration:none">Open Dashboard →</a>
     `;
     card.appendChild(b);
   }
 
   function stageColor(stage) {
-    const c = { "New":"#64748b","Warming":"#f59e0b","DM Sent":"#3b82f6","Replied":"#8b5cf6","Qualifying":"#06b6d4","Call Offered":"#10b981","Booked":"#22c55e","Closed":"#475569","DQ":"#ef4444" };
-    return c[stage] || "#64748b";
+    const c = { "New":"#64748b","Warming":"#f59e0b","DM Sent":"#3b82f6","Replied":"#FF3A69","Qualifying":"#06b6d4","Call Offered":"#10b981","Booked":"#22c55e","Closed":"#475569","DQ":"#ef4444" };
+    return c[stage] || "#64748b"; // legacy stages (Active/Churned) fall through to grey
   }
 
   async function fetchRecentMessages(leadId, dashboardUrl) {
@@ -2342,8 +2405,8 @@
 
     if (lead.stage === "DM Sent") {
       const repliedBtn = document.createElement("button");
-      repliedBtn.style.cssText = "background:#1e1a2e;border:1px solid #4c3a8a;border-radius:8px;padding:7px 10px;margin-bottom:10px;display:flex;align-items:center;gap:8px;width:100%;cursor:pointer";
-      repliedBtn.innerHTML = `<span style="font-size:14px">💬</span><div style="text-align:left"><span style="color:#c4b5fd;font-size:12px;font-weight:700">They Replied!</span><span style="color:#a78bfa;font-size:11px;margin-left:6px">Mark as Replied →</span></div>`;
+      repliedBtn.style.cssText = "background:#FF3A6912;border:1px solid #FF3A6940;border-radius:8px;padding:7px 10px;margin-bottom:10px;display:flex;align-items:center;gap:8px;width:100%;cursor:pointer";
+      repliedBtn.innerHTML = `<span style="font-size:14px">💬</span><div style="text-align:left"><span style="color:#E2E8F0;font-size:12px;font-weight:700">They Replied!</span><span style="color:#FF3A69;font-size:11px;margin-left:6px">Mark as Replied →</span></div>`;
       repliedBtn.addEventListener("click", async () => {
         repliedBtn.disabled = true;
         repliedBtn.style.opacity = "0.6";
@@ -2355,8 +2418,8 @@
 
     if (lead.stage === "Replied") {
       const replied = document.createElement("button");
-      replied.style.cssText = "background:#2d1a4a;border:1px solid #6d28d9;border-radius:8px;padding:7px 10px;margin-bottom:10px;display:flex;align-items:center;gap:8px;width:100%;cursor:pointer";
-      replied.innerHTML = `<span style="font-size:14px">💬</span><div style="text-align:left"><span style="color:#c4b5fd;font-size:12px;font-weight:700">Replied!</span><span style="color:#a78bfa;font-size:11px;margin-left:6px">Move to Qualifying →</span></div>`;
+      replied.style.cssText = "background:#FF3A6912;border:1px solid #FF3A6940;border-radius:8px;padding:7px 10px;margin-bottom:10px;display:flex;align-items:center;gap:8px;width:100%;cursor:pointer";
+      replied.innerHTML = `<span style="font-size:14px">💬</span><div style="text-align:left"><span style="color:#E2E8F0;font-size:12px;font-weight:700">Replied!</span><span style="color:#FF3A69;font-size:11px;margin-left:6px">Move to Qualifying →</span></div>`;
       replied.addEventListener("click", async () => {
         replied.disabled = true;
         replied.style.opacity = "0.6";
@@ -2387,14 +2450,14 @@
     }
 
     if (fitScore !== null || (estimatedGmv !== null && estimatedGmv > 0)) {
-      const color = fitScore !== null ? fitColor(fitScore) : "#555";
+      const color = fitScore !== null ? fitColor(fitScore) : "#5A6274";
       const infoRow = document.createElement("div");
       infoRow.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px";
       if (fitScore !== null) {
         infoRow.innerHTML += `<span style="font-size:11px;font-weight:700;color:${color};background:${color}18;border:1px solid ${color}30;padding:2px 9px;border-radius:10px">${fitScore} · ${fitLabel(fitScore)}</span>`;
       }
       if (estimatedGmv !== null && estimatedGmv > 0) {
-        infoRow.innerHTML += `<span style="font-size:11px;color:#888;font-weight:600">$${estimatedGmv.toLocaleString()}/mo</span>`;
+        infoRow.innerHTML += `<span style="font-size:11px;color:#94a3b8;font-weight:600">$${estimatedGmv.toLocaleString()}/mo</span>`;
       }
       b.appendChild(infoRow);
     }
@@ -2403,18 +2466,18 @@
       const stackRow = document.createElement("div");
       stackRow.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px";
       stackRow.innerHTML = stack.map(s =>
-        `<span style="background:#1a1a1a;border:1px solid #2a2a2a;color:#888;font-size:10px;padding:2px 7px;border-radius:10px">${s}</span>`
+        `<span style="background:#151B2E;border:1px solid #1A2235;color:#94a3b8;font-size:10px;padding:2px 7px;border-radius:10px">${s}</span>`
       ).join("");
       b.appendChild(stackRow);
     }
 
     if (opener) {
       const openerBox = document.createElement("div");
-      openerBox.style.cssText = "background:#161616;border:1px solid #222;border-radius:8px;padding:9px 10px;margin-bottom:10px;position:relative";
+      openerBox.style.cssText = "background:#151B2E;border:1px solid #1A2235;border-radius:8px;padding:9px 10px;margin-bottom:10px;position:relative";
       openerBox.innerHTML = `
-        <div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">AI Suggested Opener</div>
-        <p style="margin:0;color:#ccc;font-size:12px;line-height:1.5;padding-right:46px">${opener}</p>
-        <button id="fb-copy-opener" style="position:absolute;top:8px;right:8px;background:#FF3A69;border:none;border-radius:5px;color:#fff;font-size:10px;font-weight:600;padding:3px 8px;cursor:pointer">Copy</button>
+        <div style="font-size:9px;color:#5A6274;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">AI Suggested Opener</div>
+        <p style="margin:0;color:#CBD5E1;font-size:12px;line-height:1.5;padding-right:46px">${opener}</p>
+        <button id="fb-copy-opener" style="position:absolute;top:8px;right:8px;background:#1A2235;border:1px solid #2A3554;border-radius:5px;color:#94a3b8;font-size:10px;font-weight:600;padding:3px 8px;cursor:pointer">Copy</button>
       `;
       b.appendChild(openerBox);
       document.getElementById("fb-copy-opener").addEventListener("click", function () {
@@ -2429,10 +2492,10 @@
       const reasonDetails = document.createElement("details");
       reasonDetails.style.cssText = "margin-bottom:8px";
       const reasonSummary = document.createElement("summary");
-      reasonSummary.style.cssText = "font-size:10px;color:#3a3a50;cursor:pointer;user-select:none;letter-spacing:.3px;list-style:none";
+      reasonSummary.style.cssText = "font-size:10px;color:#475569;cursor:pointer;user-select:none;letter-spacing:.3px;list-style:none";
       reasonSummary.textContent = "Why this score?";
       const reasonText = document.createElement("p");
-      reasonText.style.cssText = "margin:4px 0 0;color:#555;font-size:11px;line-height:1.5";
+      reasonText.style.cssText = "margin:4px 0 0;color:#5A6274;font-size:11px;line-height:1.5";
       reasonText.textContent = fitReason;
       reasonDetails.appendChild(reasonSummary);
       reasonDetails.appendChild(reasonText);
@@ -2449,24 +2512,24 @@
     touchChips.style.cssText = "display:flex;gap:6px;margin-bottom:8px";
     const fbChip = document.createElement("button");
     fbChip.textContent = (fbChipDone ? "✓" : "○") + " FB";
-    fbChip.style.cssText = `flex:1;background:${fbChipDone ? "#0d2b0d" : "#161616"};border:1px solid ${fbChipDone ? "#166534" : "#2a2a35"};border-radius:6px;color:${fbChipDone ? "#4ade80" : "#555"};font-size:11px;font-weight:600;padding:5px;cursor:pointer`;
+    fbChip.style.cssText = `flex:1;background:${fbChipDone ? "#0d2b0d" : "#151B2E"};border:1px solid ${fbChipDone ? "#166534" : "#2A3554"};border-radius:6px;color:${fbChipDone ? "#4ade80" : "#5A6274"};font-size:11px;font-weight:600;padding:5px;cursor:pointer`;
     fbChip.addEventListener("click", () => {
       fbChipDone = !fbChipDone;
       fbChip.textContent = (fbChipDone ? "✓" : "○") + " FB";
-      fbChip.style.background = fbChipDone ? "#0d2b0d" : "#161616";
-      fbChip.style.borderColor = fbChipDone ? "#166534" : "#2a2a35";
-      fbChip.style.color = fbChipDone ? "#4ade80" : "#555";
+      fbChip.style.background = fbChipDone ? "#0d2b0d" : "#151B2E";
+      fbChip.style.borderColor = fbChipDone ? "#166534" : "#2A3554";
+      fbChip.style.color = fbChipDone ? "#4ade80" : "#5A6274";
       if (fbChipDone) chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { outreach_channels: { ...outreachChannels, ig_fanbasis: { sent: true, sentAt: Date.now() } } } }).catch(() => {});
     });
     const persChip = document.createElement("button");
     persChip.textContent = (persChipDone ? "✓" : "○") + " Pers.";
-    persChip.style.cssText = `flex:1;background:${persChipDone ? "#0d2b0d" : "#161616"};border:1px solid ${persChipDone ? "#166534" : "#2a2a35"};border-radius:6px;color:${persChipDone ? "#4ade80" : "#555"};font-size:11px;font-weight:600;padding:5px;cursor:pointer`;
+    persChip.style.cssText = `flex:1;background:${persChipDone ? "#0d2b0d" : "#151B2E"};border:1px solid ${persChipDone ? "#166534" : "#2A3554"};border-radius:6px;color:${persChipDone ? "#4ade80" : "#5A6274"};font-size:11px;font-weight:600;padding:5px;cursor:pointer`;
     persChip.addEventListener("click", () => {
       persChipDone = !persChipDone;
       persChip.textContent = (persChipDone ? "✓" : "○") + " Pers.";
-      persChip.style.background = persChipDone ? "#0d2b0d" : "#161616";
-      persChip.style.borderColor = persChipDone ? "#166534" : "#2a2a35";
-      persChip.style.color = persChipDone ? "#4ade80" : "#555";
+      persChip.style.background = persChipDone ? "#0d2b0d" : "#151B2E";
+      persChip.style.borderColor = persChipDone ? "#166534" : "#2A3554";
+      persChip.style.color = persChipDone ? "#4ade80" : "#5A6274";
       if (persChipDone) chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { outreach_channels: { ...outreachChannels, ig_personal: { sent: true, sentAt: Date.now() } } } }).catch(() => {});
     });
     touchChips.appendChild(fbChip);
@@ -2538,7 +2601,7 @@
       let vmIdx = 0;
       const vmBtn = document.createElement("button");
       vmBtn.textContent = "🎙 Copy VM";
-      vmBtn.style.cssText = "flex:1;background:#161616;border:1px solid #252525;border-radius:6px;color:#94a3b8;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
+      vmBtn.style.cssText = "flex:1;background:#151B2E;border:1px solid #1A2235;border-radius:6px;color:#94a3b8;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
       vmBtn.title = vmScripts[vmIdx].text;
       vmBtn.addEventListener("click", () => {
         navigator.clipboard.writeText(vmScripts[vmIdx].text).then(() => {
@@ -2552,23 +2615,23 @@
 
     const dqBtn = document.createElement("button");
     dqBtn.textContent = "✗ DQ";
-    dqBtn.style.cssText = "flex:1;background:#161616;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
+    dqBtn.style.cssText = "flex:1;background:#151B2E;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
     dqBtn.addEventListener("click", () => {
       if (dqBtn.dataset.undoing) {
         clearTimeout(Number(dqBtn.dataset.timer));
         delete dqBtn.dataset.undoing;
         dqBtn.textContent = "✗ DQ";
-        dqBtn.style.cssText = "flex:1;background:#161616;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
+        dqBtn.style.cssText = "flex:1;background:#151B2E;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
         return;
       }
       dqBtn.dataset.undoing = "1";
       dqBtn.textContent = "↩ Undo";
-      dqBtn.style.cssText = "flex:1;background:#1a1a1a;border:1px solid #444;border-radius:6px;color:#888;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
+      dqBtn.style.cssText = "flex:1;background:#151B2E;border:1px solid #5A6274;border-radius:6px;color:#94a3b8;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
       dqBtn.dataset.timer = setTimeout(async () => {
         delete dqBtn.dataset.undoing;
         dqBtn.textContent = "DQ'd"; dqBtn.disabled = true;
         const r = await chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "DQ" } }).catch(() => null);
-        if (r?.ok === false) { dqBtn.textContent = "✗ DQ"; dqBtn.disabled = false; dqBtn.style.cssText = "flex:1;background:#161616;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:5px;cursor:pointer"; return; }
+        if (r?.ok === false) { dqBtn.textContent = "✗ DQ"; dqBtn.disabled = false; dqBtn.style.cssText = "flex:1;background:#151B2E;border:1px solid #7f1d1d;border-radius:6px;color:#ef4444;font-size:11px;font-weight:600;padding:5px;cursor:pointer"; return; }
         navigateToNextLead(b, username, lead.id, dashboardUrl);
       }, 4000);
     });
@@ -2580,11 +2643,9 @@
     const sc = stageColor(lead.stage);
     const stageFooter = document.createElement("div");
     stageFooter.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:6px";
-    const stageOptions = STAGES.map(s =>
-      `<option value="${s}"${lead.stage === s ? " selected" : ""}>${s}</option>`
-    ).join("");
+    const stageOptions = stageOptionsHtml(lead.stage);
     stageFooter.innerHTML = `
-      <select id="fb-stage" style="flex:1;background:#1a1a1a;border:1px solid ${sc}55;border-radius:7px;color:${sc};font-size:12px;font-weight:600;padding:5px 8px;cursor:pointer">${stageOptions}</select>
+      <select id="fb-stage" style="flex:1;background:#151B2E;border:1px solid ${sc}55;border-radius:7px;color:${sc};font-size:12px;font-weight:600;padding:5px 8px;cursor:pointer">${stageOptions}</select>
       <a href="${dashboardUrl}/leads/${lead.id}" target="_blank" style="color:#FF3A69;font-size:11px;text-decoration:none;font-weight:600;white-space:nowrap;padding:5px">View →</a>
     `;
     b.appendChild(stageFooter);
@@ -2596,13 +2657,13 @@
     });
 
     const chatsToggle = document.createElement("details");
-    chatsToggle.style.cssText = "margin-top:8px;border-top:1px solid #1e1e2a;padding-top:6px";
+    chatsToggle.style.cssText = "margin-top:8px;border-top:1px solid #1A2235;padding-top:6px";
     const chatsSummary = document.createElement("summary");
     chatsSummary.style.cssText = "font-size:10px;color:#475569;cursor:pointer;user-select:none;list-style:none;letter-spacing:.3px;text-transform:uppercase";
     chatsSummary.textContent = "💬 Recent Chats";
     const chatsContent = document.createElement("div");
     chatsContent.style.cssText = "margin-top:6px";
-    chatsContent.innerHTML = `<div style="color:#333;font-size:11px;padding:4px 0">Loading…</div>`;
+    chatsContent.innerHTML = `<div style="color:#475569;font-size:11px;padding:4px 0">Loading…</div>`;
 
     let chatsFetched = false;
     chatsToggle.addEventListener("toggle", async () => {
@@ -2610,7 +2671,7 @@
       chatsFetched = true;
       const msgs = await fetchRecentMessages(lead.id, dashboardUrl);
       if (!msgs.length) {
-        chatsContent.innerHTML = `<div style="color:#333;font-size:11px;padding:4px 0">No messages logged yet.</div>`;
+        chatsContent.innerHTML = `<div style="color:#475569;font-size:11px;padding:4px 0">No messages logged yet.</div>`;
         return;
       }
       chatsContent.innerHTML = msgs.map((m) => {
@@ -2619,11 +2680,11 @@
         const when = m.created_at ? new Date(m.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
         const snippet = (m.body || "").slice(0, 80) + ((m.body || "").length > 80 ? "…" : "");
         return `
-          <div style="padding:5px 0;border-bottom:1px solid #1a1a1a;display:flex;gap:6px;align-items:flex-start">
-            <span style="font-size:9px;color:${m.direction === "inbound" ? "#8b5cf6" : "#3b82f6"};flex-shrink:0;margin-top:1px">${dir} ${ch}</span>
+          <div style="padding:5px 0;border-bottom:1px solid #151B2E;display:flex;gap:6px;align-items:flex-start">
+            <span style="font-size:9px;color:${m.direction === "inbound" ? "#FF3A69" : "#3b82f6"};flex-shrink:0;margin-top:1px">${dir} ${ch}</span>
             <div style="flex:1;min-width:0">
-              <span style="font-size:11px;color:#94a3b8;line-height:1.4;display:block">${snippet || "<em style='color:#333'>no preview</em>"}</span>
-              <span style="font-size:9px;color:#333">${when}</span>
+              <span style="font-size:11px;color:#94a3b8;line-height:1.4;display:block">${snippet || "<em style='color:#475569'>no preview</em>"}</span>
+              <span style="font-size:9px;color:#475569">${when}</span>
             </div>
           </div>
         `;
@@ -2654,7 +2715,7 @@
             const nextUrl = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
             const nextBtn = document.createElement("button");
             nextBtn.textContent = `Next → @${nextLead.ig_username || nextLead.name}`;
-            nextBtn.style.cssText = "width:100%;margin-top:6px;background:#161616;border:1px solid #3b82f6;border-radius:7px;color:#93c5fd;font-size:11px;font-weight:600;padding:7px;cursor:pointer";
+            nextBtn.style.cssText = "width:100%;margin-top:6px;background:#151B2E;border:1px solid #3b82f6;border-radius:7px;color:#93c5fd;font-size:11px;font-weight:600;padding:7px;cursor:pointer";
             nextBtn.addEventListener("click", () => { window.location.href = nextUrl; });
             b.appendChild(nextBtn);
           }
