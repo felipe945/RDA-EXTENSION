@@ -14,9 +14,10 @@
 --   * Logs the affected count via RAISE NOTICE.
 -- To reverse: the affected ids are the ones printed; set them back to 'Active'.
 --
--- STATUS: written but NOT YET APPLIED. Apply only after Felipe confirms the
--- count is 4. Until then, lib/stages.ts renders any lingering 'Active' value as
--- a gray, editable legacy stage, so nothing breaks in the meantime.
+-- STATUS: APPLIED 2026-07-06 (Felipe confirmed). The 4 sales/Active leads were
+-- mapped to Booked via the guarded equivalent (count-checked, 4→Booked, 0
+-- remaining). This .sql is retained as the migration-history record; re-running
+-- it is a safe no-op (0 rows now match stage='Active').
 
 begin;
 

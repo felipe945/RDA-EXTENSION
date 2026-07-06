@@ -46,9 +46,9 @@
 - [x] Phase 1 — shared modules → **CHECKPOINT S** (f212f41)
 - [x] Phase 2 — scope model + pagination → **CHECKPOINT SCOPE** (f2371ad)
 - [x] Phase 3 — import consistency (2c8a1b0)
-- [x] Phase 4 — opener pipeline built (2c8a1b0); **drain execution COST-GATED — awaiting Felipe**
+- [x] Phase 4 — opener pipeline built (2c8a1b0); drain **APPROVED (20-then-full), runs post-deploy**
 - [x] Phase 5 — deleted dead SMS/Sendblue routes (2c8a1b0)
-- [x] Phase 6 — CSM migration 019 written, **UNAPPLIED** (awaiting Felipe's confirm)
+- [x] Phase 6 — CSM migration 019 **APPLIED live 2026-07-06** (4 Active→Booked, 0 remaining)
 - [x] Phase 7 — live verify done; summary below
 
 ---
@@ -103,7 +103,18 @@
 - `npx tsc --noEmit` clean; `npm run build` clean; `/api/ai/research-drain` registered; no
   sms/sendblue routes remain.
 
-## What needs Felipe (nothing blocks T2/T3)
-1. **Drain cost gate** — approve the 20-lead batch → full drain, or hold. (See Phase 4.)
-2. **Migration 019** — confirm apply (maps 4 Active→Booked), or leave unapplied.
-3. **Vercel env** — add `CRON_SECRET`; optionally remove `SENDBLUE_*`.
+## Decisions made (2026-07-06)
+- **Migration 019 — APPLIED.** 4 sales/Active leads mapped to Booked; 0 remaining. Guarded
+  (count-checked, aborts if > 50). The `.sql` is the history record; re-running is a no-op.
+- **Drain — APPROVED: 20-lead batch first, then full.** Cannot run from this session (no local
+  ANTHROPIC key; drain calls research-lead on the deployed app). **Post-deploy runbook:**
+  1. Set `CRON_SECRET` in Vercel (and confirm `ANTHROPIC_API_KEY`/`APIFY_TOKEN` are set).
+  2. Deploy this branch.
+  3. Test batch: `GET /api/ai/research-drain?limit=20` (admin session or cron bearer).
+     Confirm real per-lead cost from the response + Anthropic/Apify dashboards.
+  4. Drain the rest in `limit`-capped ticks (or let the 10-min cron chip away), watching
+     `research_cache->>suggestedOpener` non-null count climb toward 1057.
+
+## Still needs Felipe
+- **Vercel env** — add `CRON_SECRET` (required for the drain cron); optionally remove `SENDBLUE_*`.
+- **Deploy** — this branch, so the opener-persist fix, scope/pagination, and drain go live.
