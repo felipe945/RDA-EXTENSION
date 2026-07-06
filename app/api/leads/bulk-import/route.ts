@@ -5,19 +5,25 @@ import { authOptions } from "@/lib/auth";
 import { supabaseServer } from "@/lib/supabase";
 import { scoreLead } from "@/lib/scoring";
 import { inngest } from "@/lib/inngest";
+import { inngestConfigured } from "@/lib/research-trigger";
 import { getSupabaseErrorMessage } from "@/lib/supabaseError";
 
 // POST /api/leads/bulk-import
 // Bulk-create leads from a mapped CSV. Dedups on ig_username (DB-enforced by
 // migration 012) and, as a nicety, on email within the org. New leads are scored
-// with the shared scoreLead() and stamped with org_id/owner_id.
+// with the shared scoreLead().
 //
-// Body: { leads: RawLead[], onConflict?: "skip" | "update", research?: boolean, dryRun?: boolean }
-//   dryRun  -> returns { preview: { new, existing, invalid, total } } and writes nothing.
-//   research -> opt-in. Inserted leads get research_status "pending" and one Inngest
-//               event each (Inngest is the throttled drain). If Inngest is unreachable
-//               the leads stay "pending" for a later manual drain — we never fan out
-//               direct fetches for a bulk import (that would blast the Anthropic API).
+// OWNERSHIP: inserts default to the shared cold pool (owner_id = null) so any
+// rep can work them. Pass assignToMe:true to claim them for the importer.
+//
+// Body: { leads: RawLead[], onConflict?: "skip"|"update", research?: boolean,
+//         assignToMe?: boolean, dryRun?: boolean }
+//   dryRun   -> returns { preview: {...} } and writes nothing.
+//   research -> opt-in. Inserted leads get research_status "pending" and (when
+//               Inngest is configured) one enqueue event each. We never fan out
+//               direct fetches here — that would blast the Anthropic API. When
+//               Inngest is unset the leads stay "pending" and the throttled
+//               research-drain cron picks them up.
 
 const rawLeadSchema = z.object({
   ig_username: z.string().optional().nullable(),
@@ -35,6 +41,7 @@ const bodySchema = z.object({
   leads: z.array(rawLeadSchema).min(1).max(5000),
   onConflict: z.enum(["skip", "update"]).default("skip"),
   research: z.boolean().default(false),
+  assignToMe: z.boolean().default(false),
   dryRun: z.boolean().default(false),
 });
 
@@ -104,7 +111,9 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  const { leads, onConflict, research, dryRun } = parsed.data;
+  const { leads, onConflict, research, assignToMe, dryRun } = parsed.data;
+  // Pooled by default; claimed by the importer only when assignToMe is set.
+  const insertOwnerId = assignToMe ? ownerId : null;
   const db = supabaseServer();
 
   // Normalize + split valid/invalid.
@@ -209,7 +218,7 @@ export async function POST(req: NextRequest) {
     mode: "sales" as const,
     stage: "New" as const,
     org_id: orgId,
-    owner_id: ownerId,
+    owner_id: insertOwnerId,
     due_at: dueIso,
     updated_at: nowIso,
     research_status: research ? "pending" : "none",
@@ -242,18 +251,19 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // --- Opt-in research: enqueue via Inngest (the throttled drain). ---
+  // --- Opt-in research. Enqueue via Inngest when configured; otherwise leave
+  // the leads research_status="pending" for the throttled research-drain cron.
+  // We deliberately never fan out direct fetches here (that would blast the
+  // Anthropic API for a large CSV). ---
   let researchQueued = 0;
-  if (research && insertedIds.length) {
+  if (research && insertedIds.length && inngestConfigured()) {
     try {
       await inngest.send(
         insertedIds.map((leadId) => ({ name: "lead/research.requested", data: { leadId } }))
       );
       researchQueued = insertedIds.length;
     } catch (err) {
-      // Leave them research_status="pending" for a later drain rather than
-      // firing hundreds of direct fetches at the Anthropic API.
-      console.error("bulk-import: inngest.send failed; leads left pending for manual drain", err);
+      console.error("bulk-import: inngest.send failed; leads left pending for the drain", err);
     }
   }
 

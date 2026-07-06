@@ -2,6 +2,10 @@
   "framework": "nextjs",
   "functions": {
     "app/api/ai/research-lead/route.ts": { "maxDuration": 120 },
+    "app/api/ai/research-drain/route.ts": { "maxDuration": 300 },
     "app/api/leads/batch-enrich/route.ts": { "maxDuration": 300 }
-  }
+  },
+  "crons": [
+    { "path": "/api/ai/research-drain?limit=15", "schedule": "*/10 * * * *" }
+  ]
 }

@@ -26,6 +26,17 @@ const args = process.argv.slice(2);
 const target = args[0]?.replace(/^@/, "");
 const platformFlag = args.indexOf("--platform");
 const platform = platformFlag !== -1 ? args[platformFlag + 1] : "instagram";
+// Opt-in: enqueue research right after insert (throttled direct fetch). Off by
+// default — new leads land as research_status "pending" and the throttled
+// research-drain cron generates their openers, so nothing is stuck. Use
+// --research to enrich immediately (incurs Claude + Apify cost per lead), and
+// --url to point at the deployed app when no local dev server is running.
+const wantResearch = args.includes("--research");
+const urlFlag = args.indexOf("--url");
+const researchBaseUrl =
+  (urlFlag !== -1 ? args[urlFlag + 1] : undefined) ??
+  process.env.NEXT_PUBLIC_BASE_URL ??
+  "http://localhost:3000";
 
 const MIN_FOLLOWERS = 10_000;
 const MAX_FOLLOWERS = 150_000; // above this = likely already on FanBasis or too big to cold DM
@@ -143,7 +154,9 @@ async function main() {
     return;
   }
 
-  const { error } = await supabase.from("leads").insert(newLeads);
+  // Leads land pooled (no owner_id) and research_status "pending" so any rep can
+  // work them and the drain can enrich them.
+  const { data: inserted, error } = await supabase.from("leads").insert(newLeads).select("id");
 
   if (error) {
     console.error("\nSupabase error:", error.message);
@@ -152,6 +165,46 @@ async function main() {
 
   console.log(`\n✓ Imported ${newLeads.length} new leads (${leads.length - newLeads.length} already existed)`);
   console.log(`  Tagged: ${platformTag}, coach, ${platform}`);
+
+  const insertedIds = (inserted ?? []).map((r) => r.id as string);
+  if (wantResearch && insertedIds.length) {
+    await enqueueResearchForLeads(insertedIds);
+  } else if (insertedIds.length) {
+    console.log(
+      `\n  ${insertedIds.length} leads are research_status "pending" — the research-drain cron will\n` +
+      `  generate their openers. Re-run with --research (and optionally --url <deployedUrl>)\n` +
+      `  to enrich them now (incurs Claude + Apify cost per lead).`
+    );
+  }
+}
+
+// Throttled, best-effort direct research enqueue. Concurrency 3 mirrors the
+// drain; research-lead short-circuits on already-complete leads. Never throws.
+async function enqueueResearchForLeads(ids: string[]) {
+  const CONCURRENCY = 3;
+  console.log(`\nEnqueuing research for ${ids.length} leads via ${researchBaseUrl} (concurrency ${CONCURRENCY})...`);
+  let done = 0;
+  let failed = 0;
+  const queue = [...ids];
+  async function worker() {
+    while (queue.length) {
+      const id = queue.shift()!;
+      try {
+        const res = await fetch(`${researchBaseUrl}/api/ai/research-lead`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ leadId: id }),
+        });
+        if (!res.ok) failed++;
+      } catch {
+        failed++;
+      }
+      done++;
+      if (done % 25 === 0 || done === ids.length) console.log(`  research ${done}/${ids.length} (${failed} failed)`);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker));
+  console.log(`✓ Research enqueue complete: ${done - failed} ok, ${failed} failed.`);
 }
 
 main().catch((err) => {

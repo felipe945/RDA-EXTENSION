@@ -2,7 +2,7 @@ import { type NextRequest } from "next/server";
 import { z } from "zod";
 import { supabaseServer } from "@/lib/supabase";
 import { scoreLead } from "@/lib/scoring";
-import { inngest } from "@/lib/inngest";
+import { enqueueResearch } from "@/lib/research-trigger";
 import { verifyRepToken } from "@/lib/extension-token";
 
 const igEventSchema = z.object({
@@ -126,24 +126,11 @@ export async function POST(req: NextRequest) {
       leadId = newLead.id as string;
     }
 
-    // Durable research trigger. Inngest retries transient Anthropic failures with
-    // backoff. But the save itself must NEVER fail because research couldn't be
-    // enqueued — a saved-but-unresearched lead is fine (research_status stays
-    // 'pending' and can be retried), a failed save loses the lead entirely.
-    try {
-      await inngest.send({ name: "lead/research.requested", data: { leadId } });
-    } catch (err) {
-      // Inngest unreachable (keys unset / dev server down). Fall back to the old
-      // fire-and-forget direct call so research still runs pre-Inngest, and log
-      // for Sentry instead of throwing into the save response.
-      console.error("inngest.send failed, falling back to direct research fetch", err);
-      const { getBaseUrl } = await import("@/lib/base-url");
-      fetch(`${getBaseUrl()}/api/ai/research-lead`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId }),
-      }).catch((e) => console.error("fallback research fetch failed", e));
-    }
+    // Durable research trigger. Prefers Inngest (retries transient Anthropic
+    // failures); falls back to a direct fetch when Inngest is unconfigured or
+    // send() throws. Never throws into the save response — a saved-but-
+    // unresearched lead is fine (drain retries), a failed save loses the lead.
+    await enqueueResearch(leadId);
 
     return Response.json({ ok: true, leadId });
   }

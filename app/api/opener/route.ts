@@ -102,8 +102,32 @@ export async function GET(req: NextRequest) {
         channel,
         fresh,
       );
-      const opener = await ask(SYSTEM, userMsg, 500, 0.9);
-      return NextResponse.json({ opener: opener.trim(), source: "generated" }, { headers: CORS });
+      const opener = (await ask(SYSTEM, userMsg, 500, 0.9)).trim();
+
+      // Persist so the generation isn't thrown away — merge-patch into
+      // research_cache.openers.{ig|personal} + suggestedOpener without clobbering
+      // the rest of the cache. This is what makes generated openers stick (and
+      // what flips research_cache->suggestedOpener non-null so the drain skips
+      // this lead going forward). Best-effort — never fail the response on it.
+      try {
+        const cache = (lead?.research_cache ?? {}) as Record<string, unknown>;
+        const openers = { ...((cache.openers as Record<string, unknown>) ?? {}) };
+        if (channel === "ig_personal") openers.personal = opener;
+        else openers.ig = opener;
+        const nextCache = {
+          ...cache,
+          openers,
+          suggestedOpener: (openers.ig as string) ?? (openers.personal as string) ?? opener,
+        };
+        await db
+          .from("leads")
+          .update({ research_cache: nextCache, updated_at: new Date().toISOString() })
+          .eq("id", leadId);
+      } catch (e) {
+        console.error("[opener] failed to persist generated opener", e);
+      }
+
+      return NextResponse.json({ opener, source: "generated" }, { headers: CORS });
     } catch {
       // fall through to non-lead path
     }
