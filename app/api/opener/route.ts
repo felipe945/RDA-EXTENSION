@@ -71,6 +71,9 @@ export async function GET(req: NextRequest) {
   const bio       = searchParams.get("bio") || "";
   const followers = searchParams.get("followers") || "";
   const username  = searchParams.get("ig_username") || "";
+  // ?fresh=1 (or ?regenerate=1) skips the cached opener and generates a new,
+  // varied one — this is what makes "Regenerate" actually produce something new.
+  const fresh     = searchParams.get("fresh") === "1" || searchParams.get("regenerate") === "1";
 
   // If we have a lead_id, try to pull from research_cache first
   if (leadId) {
@@ -82,7 +85,7 @@ export async function GET(req: NextRequest) {
         .eq("id", leadId)
         .maybeSingle();
 
-      if (lead?.research_cache?.openers) {
+      if (!fresh && lead?.research_cache?.openers) {
         const cached = channel === "ig_personal"
           ? lead.research_cache.openers.personal || lead.research_cache.openers.ig
           : lead.research_cache.openers.ig;
@@ -97,8 +100,9 @@ export async function GET(req: NextRequest) {
         lead?.bio || bio,
         lead?.follower_count?.toString() || followers,
         channel,
+        fresh,
       );
-      const opener = await ask(SYSTEM, userMsg, 500);
+      const opener = await ask(SYSTEM, userMsg, 500, 0.9);
       return NextResponse.json({ opener: opener.trim(), source: "generated" }, { headers: CORS });
     } catch {
       // fall through to non-lead path
@@ -110,8 +114,8 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const userMsg = buildUserMsg(username, name, bio, followers, channel);
-    const opener = await ask(SYSTEM, userMsg, 500);
+    const userMsg = buildUserMsg(username, name, bio, followers, channel, fresh);
+    const opener = await ask(SYSTEM, userMsg, 500, 0.9);
     return NextResponse.json({ opener: opener.trim(), source: "generated" }, { headers: CORS });
   } catch (err) {
     console.error("[opener]", err);
@@ -125,6 +129,7 @@ function buildUserMsg(
   bio: string,
   followers: string,
   channel: string,
+  fresh = false,
 ) {
   const firstName = (name || "").split(/\s+/)[0] || username || "them";
   const bioLine = bio ? `Bio: "${bio}"` : "Bio: (none — infer from username and follower count)";
@@ -140,6 +145,6 @@ Creator:
 PART 1 must reference something SPECIFIC from their bio or niche — not generic. If the bio is empty, infer from their username or follower count (micro vs macro creator). Never write a generic hook.
 PART 2 picks 2 of the 3 FanBasis props most relevant to their situation.
 PART 3 ends with a single low-commitment ask using "45 min".
-
+${fresh ? "\nREGENERATE: write a DISTINCT variation — a different personalization angle and fresh phrasing than a standard version, while keeping the 3-part structure, voice, and rules.\n" : ""}
 Return ONLY the DM text. No labels, no quotes.`;
 }

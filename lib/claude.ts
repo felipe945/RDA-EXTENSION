@@ -6,10 +6,12 @@ export async function ask(
   systemPrompt: string,
   userMessage: string,
   maxTokens = 4096,
+  temperature?: number,
 ): Promise<string> {
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: maxTokens,
+    ...(temperature != null ? { temperature } : {}),
     system: systemPrompt,
     messages: [{ role: "user", content: userMessage }],
   });

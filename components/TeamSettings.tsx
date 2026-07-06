@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useTeam, type Invite } from "@/hooks/useTeam";
 import { AESettings } from "@/components/AESettings";
+import { QuicklinksSettings } from "@/components/QuicklinksSettings";
 import { useToast } from "@/components/ui/toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -254,6 +255,8 @@ export function TeamSettings() {
       </section>
 
       <AESettings />
+
+      <QuicklinksSettings />
     </div>
   );
 }

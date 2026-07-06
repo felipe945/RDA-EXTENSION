@@ -1214,58 +1214,40 @@ function renderOutreach() {
 const catSelect = document.getElementById("scriptCategory");
 const scriptListEl = document.getElementById("scriptList");
 
-const DEFAULT_LINKS = [
-  { label: "Salesforce", url: "https://saas-data-1186.lightning.force.com/lightning/page/home" },
-  { label: "BNPL", url: "https://www.fanbasis.com/bnpl" },
-  { label: "Seller Signup", url: "https://www.fanbasis.com/seller" },
-  { label: "Enterprises", url: "https://www.fanbasis.com/enterprises" },
-  { label: "VIP Deposit", url: "https://webinarcon.com/vip-deposit/" },
-];
-
-// Quicklinks tab: admin/team defaults (seeded above) + per-rep links saved to
-// chrome.storage.sync. Team-managed defaults from the dashboard come with the
-// server deploy; this is the client-side, works-offline version.
+// Quicklinks tab — team + personal links come from the dashboard via bootstrap
+// and render read-only. All management lives on the dashboard (Team Settings),
+// so there are no link settings inside the extension.
 function renderLinks() {
   const el = document.getElementById("linksList");
   if (!el) return;
-  chrome.storage.sync.get({ fbUserLinks: [] }, ({ fbUserLinks }) => {
-    const userLinks = Array.isArray(fbUserLinks) ? fbUserLinks : [];
-    const row = (l, removable, i) => `
-      <div class="ql-row">
-        <a class="ql-link" data-url="${esc(l.url)}" href="${esc(l.url)}">
-          <span class="ql-label">${esc(l.label)}</span>
-          <span class="ql-url">${esc(l.url.replace(/^https?:\/\//, ""))}</span>
-        </a>
-        ${removable ? `<button class="ql-del" data-i="${i}" title="Remove">✕</button>` : ""}
-      </div>`;
-    el.innerHTML =
-      `<div class="ql-section-label">Team links</div>` +
-      DEFAULT_LINKS.map((l) => row(l, false)).join("") +
-      (userLinks.length ? `<div class="ql-section-label">My links</div>` + userLinks.map((l, i) => row(l, true, i)).join("") : "") +
-      `<div class="ql-add">
-        <input id="ql-label" placeholder="Label" />
-        <input id="ql-url" placeholder="paste a link…" />
-        <button id="ql-add-btn">Add</button>
-      </div>`;
+  const row = (l) => `
+    <div class="ql-row">
+      <a class="ql-link" data-url="${esc(l.url)}" href="${esc(l.url)}">
+        <span class="ql-label">${esc(l.label)}</span>
+        <span class="ql-url">${esc((l.url || "").replace(/^https?:\/\//, ""))}</span>
+      </a>
+    </div>`;
+  const draw = (boot) => {
+    const ql = boot?.quicklinks || { team: [], personal: [] };
+    const team = ql.team || [], personal = ql.personal || [];
+    const dashUrl = boot?.dashboardUrl || "https://unified-sales-ops.vercel.app";
+    if (!team.length && !personal.length) {
+      el.innerHTML = `<div class="empty-state"><div class="empty-icon">🔗</div><p>No links yet</p><span>Add links in the dashboard → Team Settings and they'll show up here.</span></div>`;
+    } else {
+      el.innerHTML =
+        (team.length ? `<div class="ql-section-label">Team links</div>` + team.map(row).join("") : "") +
+        (personal.length ? `<div class="ql-section-label">My links</div>` + personal.map(row).join("") : "") +
+        `<div style="padding:14px;text-align:center"><a href="#" id="ql-manage-link" style="font-size:11px;color:#5A6B8C;text-decoration:none">Manage links in dashboard →</a></div>`;
+    }
     el.querySelectorAll(".ql-link").forEach((a) =>
       a.addEventListener("click", (e) => { e.preventDefault(); chrome.tabs.create({ url: a.dataset.url }); })
     );
-    el.querySelectorAll(".ql-del").forEach((b) =>
-      b.addEventListener("click", () => {
-        const next = userLinks.slice();
-        next.splice(parseInt(b.dataset.i, 10), 1);
-        chrome.storage.sync.set({ fbUserLinks: next }, renderLinks);
-      })
-    );
-    document.getElementById("ql-add-btn").addEventListener("click", () => {
-      const label = document.getElementById("ql-label").value.trim();
-      let url = document.getElementById("ql-url").value.trim();
-      if (!url) return;
-      if (!/^https?:\/\//i.test(url)) url = "https://" + url;
-      const next = [...userLinks, { label: label || url.replace(/^https?:\/\//, ""), url }];
-      chrome.storage.sync.set({ fbUserLinks: next }, renderLinks);
-    });
-  });
+    const mng = document.getElementById("ql-manage-link");
+    if (mng) mng.addEventListener("click", (e) => { e.preventDefault(); chrome.tabs.create({ url: `${dashUrl}/settings/team` }); });
+  };
+  // Instant from cache, then refresh from the dashboard so newly-added links appear.
+  chrome.storage.local.get({ fb_bootstrap: null }, ({ fb_bootstrap }) => draw(fb_bootstrap));
+  chrome.runtime.sendMessage({ type: "REFRESH_BOOTSTRAP" }, (res) => { if (res?.bootstrap) draw(res.bootstrap); });
 }
 
 function renderScripts() {

@@ -33,6 +33,31 @@ export async function GET(req: NextRequest) {
     .maybeSingle();
   const google = await getGoogleIntegration(rep.rep_id);
 
+  // Quicklinks (Links tab): team defaults + this rep's personal links. Managed
+  // on the dashboard; the extension renders read-only what we return here.
+  const { data: m } = await db
+    .from("memberships")
+    .select("org_id")
+    .eq("user_id", rep.rep_id)
+    .maybeSingle();
+  let quicklinks: {
+    team: { label: string; url: string }[];
+    personal: { label: string; url: string }[];
+  } = { team: [], personal: [] };
+  if (m?.org_id) {
+    const { data: links } = await db
+      .from("quicklinks")
+      .select("label, url, user_id, sort")
+      .eq("org_id", m.org_id)
+      .or(`user_id.is.null,user_id.eq.${rep.rep_id}`)
+      .order("sort", { ascending: true })
+      .order("created_at", { ascending: true });
+    quicklinks = {
+      team: (links ?? []).filter((l) => l.user_id === null).map(({ label, url }) => ({ label, url })),
+      personal: (links ?? []).filter((l) => l.user_id === rep.rep_id).map(({ label, url }) => ({ label, url })),
+    };
+  }
+
   return Response.json({
     ok: true,
     dashboardUrl: requestOrigin(req),
@@ -48,5 +73,6 @@ export async function GET(req: NextRequest) {
       slotMins: google?.slot_mins ?? DEFAULT_SLOT_MINS,
       timezone: google?.timezone ?? DEFAULT_TIMEZONE,
     },
+    quicklinks,
   });
 }
