@@ -4,7 +4,7 @@
 // - Sets badge count for urgent items
 // - Relays messages between content scripts and API
 
-const DEFAULT_URL = "https://unified-sales-ops.vercel.app";
+const DEFAULT_URL = "https://fanmas.vercel.app";
 
 // ── Rep auth (CONNECT contracts C1/C2) ────────────────────────────────────────
 // The extension never runs its own Google OAuth. Sign-in goes through the
