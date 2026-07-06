@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import Link from "next/link";
 import { useLeads } from "@/hooks/useLeads";
 import { useMode } from "@/components/ModeProvider";
 import type { Lead } from "@/hooks/useLeads";
@@ -10,11 +11,9 @@ import { TouchChips } from "@/components/TouchChips";
 import BookCallModal from "@/components/BookCallModal";
 import { buildQueue, computeBatchProgress, type QueueChannel } from "@/lib/queue";
 import { scriptsForStage } from "@/lib/scripts";
-import { stageColor } from "@/lib/stage-colors";
+import { stageColor } from "@/lib/stages";
 
 type Channel = QueueChannel;
-
-const SALES_STAGES = ["New", "Warming", "DM Sent", "Replied", "Qualifying", "Call Offered", "Booked", "Closed", "DQ", "Blocked"];
 
 const CHANNEL_LABELS: Record<Channel, string> = { ig: "Instagram", email: "Email", linkedin: "LinkedIn" };
 
@@ -52,16 +51,18 @@ export default function OutreachPage() {
   const [doneCount, setDoneCount] = useState(0);
   const [copied, setCopied] = useState(false);
   const [note, setNote] = useState("");
-  const [saving, setSaving] = useState<false | "sent" | "dq" | "blocked" | "stage" | "due">(false);
+  const [saving, setSaving] = useState<false | "sent" | "dq">(false);
+  const [generating, setGenerating] = useState(false);
   const [pendingUndo, setPendingUndo] = useState<{
     lead: Lead; opener: string; note: string; timer: ReturnType<typeof setTimeout>;
   } | null>(null);
-  const [bookMode, setBookMode] = useState<"book" | "availability" | null>(null);
+  const [bookOpen, setBookOpen] = useState(false);
+  const [scriptsOpen, setScriptsOpen] = useState(false);
   const [recentMsgs, setRecentMsgs] = useState<
     { id: string; channel: string; direction: string; body: string | null; created_at: string }[]
   >([]);
 
-  // Queue + progress math come from lib/queue (FBQueue parity, G2/G9):
+  // Queue + progress math come from lib/queue (FBQueue parity, Contract QUEUE):
   // open = not-done + not-snoozed + has-channel, sorted by displayed fit score.
   const allLeads = allLeadsRaw as LeadPlus[];
   const queued = buildQueue(allLeads, channel);
@@ -78,14 +79,16 @@ export default function OutreachPage() {
     });
   }, [opener]);
 
-  // C7: the primary "open" is the profile page, not the DM thread — matches
-  // the extension. openDm stays as the secondary action.
-  function openProfile() {
+  // THE primary action. For IG it opens the DM thread itself — the opener is
+  // on the clipboard, the compose box is one paste away. (The old primary
+  // opened the profile and a separate "Open DM ↗" did this; merged.)
+  function primaryAction() {
     if (!lead) return;
+    copyOpener();
     if (channel === "ig") {
       const url = lead.ig_username
-        ? igProfileUrl(lead.ig_username)
-        : lead.ig_profile_url;
+        ? igDmUrl(lead.ig_username)
+        : lead.ig_profile_url ?? (lead.ig_username ? igProfileUrl(lead.ig_username) : null);
       if (url) window.open(url, "_blank");
     } else if (channel === "linkedin" && lead.linkedin_url) {
       window.open(lead.linkedin_url, "_blank");
@@ -94,16 +97,6 @@ export default function OutreachPage() {
       const subject = (openers?.["email"] as { subject?: string } | undefined)?.subject ?? "";
       window.open(`mailto:${lead.email}?subject=${encodeURIComponent(subject)}`, "_blank");
     }
-  }
-
-  function openAndCopy() {
-    copyOpener();
-    openProfile();
-  }
-
-  function openDm() {
-    if (!lead?.ig_username) return;
-    window.open(igDmUrl(lead.ig_username), "_blank");
   }
 
   async function markSent() {
@@ -177,7 +170,7 @@ export default function OutreachPage() {
     return () => { if (pendingUndo) clearTimeout(pendingUndo.timer); };
   }, [pendingUndo]);
 
-  // Last-4 message history for the current card (G6) — same context the
+  // Last-4 message history for the current card — same context the
   // extension's "Recent Chats" gives before writing a DM.
   const leadId = lead?.id ?? null;
   useEffect(() => {
@@ -194,54 +187,34 @@ export default function OutreachPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leadId]);
 
-  // Full stage control (G3) — any of the 10 sales stages without leaving the
-  // queue. Moving to a done-stage drops the card on the next refresh.
-  async function setStageTo(stage: string) {
+  async function markDq() {
     if (!lead || saving) return;
-    setSaving("stage");
+    setSaving("dq");
     await fetch("/api/leads", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: lead.id, stage, updated_at: new Date().toISOString() }),
+      body: JSON.stringify({ id: lead.id, stage: "DQ", updated_at: new Date().toISOString() }),
     });
-    setSaving(false);
-    await refresh();
-    setIdx((i) => Math.min(i, Math.max(0, queued.length - 2)));
-  }
-
-  // Push the follow-up date without leaving the queue (G7).
-  async function bumpDueDate(days: number) {
-    if (!lead || saving) return;
-    setSaving("due");
-    await fetch("/api/leads", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: lead.id,
-        due_at: new Date(Date.now() + days * 86400000).toISOString(),
-        updated_at: new Date().toISOString(),
-      }),
-    });
-    setSaving(false);
-    await refresh();
-  }
-
-  async function markStage(stage: "DQ" | "Blocked") {
-    if (!lead || saving) return;
-    setSaving(stage === "DQ" ? "dq" : "blocked");
-    const now = new Date().toISOString();
-
-    await fetch("/api/leads", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: lead.id, stage, updated_at: now }),
-    });
-
     setNote("");
     setCopied(false);
     setSaving(false);
     await refresh();
     setIdx((i) => Math.min(i, Math.max(0, queued.length - 2)));
+  }
+
+  // Every non-complete status gets a working path to an opener — pending,
+  // enriched*, none, error alike. force regenerates off-type statuses
+  // (T1's server guarantees generation for all of them).
+  async function generateOpener() {
+    if (!lead || generating) return;
+    setGenerating(true);
+    await fetch("/api/ai/research-lead", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ leadId: lead.id, force: true }),
+    });
+    setGenerating(false);
+    await refresh();
   }
 
   function skip() {
@@ -260,6 +233,11 @@ export default function OutreachPage() {
   const fitScore = typeof cache.fitScore === "number" ? cache.fitScore : null;
   const stack = Array.isArray(cache.stackDetected) ? (cache.stackDetected as string[]) : [];
   const summary = typeof cache.summary === "string" ? cache.summary : null;
+  const stageScriptCount = lead
+    ? scriptsForStage(lead.stage).filter((s) =>
+        channel === "email" ? s.category === "email" : s.category !== "email",
+      ).length
+    : 0;
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
@@ -291,20 +269,12 @@ export default function OutreachPage() {
         </div>
       </div>
 
-      {/* Batch progress — reached-out share from server stage data (G2), so it
-          survives reloads and matches the extension's number exactly. */}
+      {/* ONE honest counter: your place in the queue, plus a plain-text
+          contacted subline from server stage data (no second % bar). */}
       {progress.total > 0 && (
-        <div className="mb-6">
-          <div className="flex justify-between text-xs text-gray-500 mb-1.5">
-            <span>{queued.length > 0 ? `Card ${idx + 1} of ${queued.length}` : "Queue empty"}</span>
-            <span>Reached out: {progress.contacted} / {progress.total} · {progress.pct}%</span>
-          </div>
-          <div className="bg-gray-800 rounded-full h-1">
-            <div
-              className="bg-[#FF3A69] h-1 rounded-full transition-all"
-              style={{ width: `${progress.pct}%` }}
-            />
-          </div>
+        <div className="mb-6 flex justify-between text-xs text-gray-500">
+          <span>{queued.length > 0 ? `Card ${idx + 1} of ${queued.length}` : "Queue empty"}</span>
+          <span>{progress.contacted} of {progress.total} contacted</span>
         </div>
       )}
 
@@ -364,20 +334,15 @@ export default function OutreachPage() {
               </div>
             )}
 
-            {/* Full stage control (G3) + two-touch chips (G5) — same as the
-                extension card, so stage moves never require leaving the queue */}
+            {/* Stage as a read-only badge — the queue moves stages via DM Sent
+                and DQ; anything exotic happens in lead detail. */}
             <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
-              <select
-                value={lead.stage}
-                onChange={(e) => setStageTo(e.target.value)}
-                disabled={!!saving}
-                className="bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs font-semibold outline-none focus:border-gray-500 disabled:opacity-50"
-                style={{ color: stageColor(lead.stage) }}
+              <span
+                className="text-xs font-semibold px-2 py-0.5 rounded-full border"
+                style={{ color: stageColor(lead.stage), borderColor: `${stageColor(lead.stage)}44`, background: `${stageColor(lead.stage)}14` }}
               >
-                {SALES_STAGES.map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
+                {lead.stage}
+              </span>
               {channel === "ig" && <TouchChips lead={lead} />}
             </div>
 
@@ -395,14 +360,7 @@ export default function OutreachPage() {
               <p className="text-sm text-gray-400 leading-relaxed mb-3 border-t border-gray-800 pt-3">{summary}</p>
             )}
 
-            {lead.research_status === "pending" && (
-              <div className="flex items-center gap-2 text-xs text-gray-500 mb-3 border-t border-gray-800 pt-3">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#FF3A69] animate-pulse inline-block" />
-                Research in progress — opener will appear shortly
-              </div>
-            )}
-
-            {/* Last-4 message history (G6) — context before writing, no detour to Inbox */}
+            {/* Last-4 message history — context before writing, no detour to Inbox */}
             {recentMsgs.length > 0 && (
               <div className="border-t border-gray-800 pt-3 space-y-1.5">
                 <p className="text-[10px] text-gray-600 uppercase tracking-wide">Recent messages</p>
@@ -421,7 +379,7 @@ export default function OutreachPage() {
             )}
           </div>
 
-          {/* Opener */}
+          {/* Opener — the hero */}
           {opener ? (
             <div className="bg-gray-950 border border-gray-700 rounded-xl p-4 space-y-3">
               <div className="flex items-center justify-between">
@@ -434,31 +392,31 @@ export default function OutreachPage() {
             <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 space-y-3">
               <p className="text-sm text-gray-600 text-center">
                 {lead.research_status === "pending"
-                  ? "Opener generating... refresh in ~30s"
+                  ? "Opener generating — usually ~30s. Skip ahead or regenerate."
                   : lead.research_status === "error"
                   ? "Research failed."
                   : "No opener yet."}
               </p>
-              {(lead.research_status === "none" || lead.research_status === "error") && (
-                <button
-                  onClick={async () => {
-                    await fetch("/api/ai/research-lead", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ leadId: lead.id, force: true }),
-                    });
-                    await refresh();
-                  }}
-                  className="w-full text-xs py-2 border border-gray-700 rounded-lg text-gray-400 hover:text-white hover:border-[#FF3A69] transition-colors"
-                >
-                  Research this lead →
-                </button>
-              )}
+              <button
+                onClick={generateOpener}
+                disabled={generating}
+                className="w-full text-xs py-2 border border-gray-700 rounded-lg text-gray-400 hover:text-white hover:border-[#FF3A69] transition-colors disabled:opacity-50"
+              >
+                {generating ? "Generating…" : "Generate opener →"}
+              </button>
             </div>
           )}
 
-          {/* Stage-aware script picker (G4) — the extension's carousel, in the flow */}
-          <StageScripts stage={lead.stage} channel={channel} leadName={lead.name ?? null} />
+          {/* Scripts live one click away — the opener stays the only message
+              surface on the card itself. */}
+          {stageScriptCount > 0 && (
+            <button
+              onClick={() => setScriptsOpen(true)}
+              className="w-full text-left text-xs px-3 py-2 bg-gray-900 border border-gray-800 rounded-lg text-gray-500 hover:text-gray-300 hover:border-gray-700 transition-colors"
+            >
+              Scripts for this stage ({stageScriptCount}) →
+            </button>
+          )}
 
           <textarea
             value={note}
@@ -468,27 +426,31 @@ export default function OutreachPage() {
             className="w-full bg-gray-900 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-300 placeholder-gray-700 resize-none outline-none focus:border-gray-600"
           />
 
-          {/* Primary action */}
-          <div className="grid grid-cols-2 gap-3">
+          {/* Primary action — ONE loud button; DM Sent confirms quietly beside it
+              (same hierarchy as lead-detail's quiet "See Availability" + pink "Book a Call") */}
+          <div className="flex gap-3">
             <button
-              onClick={openAndCopy}
-              className="flex items-center justify-center gap-2 px-4 py-3 bg-[#FF3A69] hover:bg-[#e03060] text-white font-semibold rounded-lg transition-colors text-sm"
+              onClick={primaryAction}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[#FF3A69] hover:bg-[#e03060] text-white font-semibold rounded-lg transition-colors text-sm shadow-[0_4px_16px_rgba(255,58,105,0.3)]"
             >
-              {copied ? "✓ Copied!" : (
-                <><span>Open {CHANNEL_LABELS[channel]}</span><span className="opacity-70">+ Copy</span></>
+              {copied ? "✓ Copied!" : channel === "ig" ? (
+                <><span>Copy opener</span><span className="opacity-70">+ Open DM</span></>
+              ) : (
+                <><span>Copy</span><span className="opacity-70">+ Open {CHANNEL_LABELS[channel]}</span></>
               )}
             </button>
             <button
               onClick={markSent}
               disabled={!!saving || !!pendingUndo}
-              className="px-4 py-3 bg-green-900 hover:bg-green-800 border border-green-700 text-green-300 font-semibold rounded-lg transition-colors text-sm disabled:opacity-50"
+              className="shrink-0 px-4 py-3 bg-transparent hover:bg-gray-800 border border-gray-700 text-gray-300 font-medium rounded-lg transition-colors text-sm disabled:opacity-50"
             >
               {saving === "sent" ? "Saving..." : pendingUndo ? "Queued…" : "✓ DM Sent"}
             </button>
           </div>
 
-          {/* Snooze — server-persisted, shared with the extension */}
-          <div className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-900 px-3 py-2">
+          {/* Later + booking — one "later" control (snooze), one 📅 Book.
+              Book is a normal secondary button (the loud pink stays on the primary above). */}
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-2">
             <SnoozeControl
               lead={lead}
               onSnoozed={async () => {
@@ -498,53 +460,15 @@ export default function OutreachPage() {
                 setIdx((i) => Math.min(i, Math.max(0, queued.length - 2)));
               }}
             />
-            {lead.ig_username && (
-              <button
-                onClick={openDm}
-                className="rounded border border-gray-700 px-2 py-0.5 text-xs text-gray-500 transition-colors hover:border-gray-500 hover:text-gray-300"
-                title="Open the Instagram DM thread"
-              >
-                Open DM ↗
-              </button>
-            )}
-          </div>
-
-          {/* Follow-up date (G7) + real call booking (G1) */}
-          <div className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-900 px-3 py-2">
-            <span className="inline-flex items-center gap-1.5 flex-wrap">
-              <span className="text-xs text-gray-500">Follow-up:</span>
-              {[1, 3, 7].map((d) => (
-                <button
-                  key={d}
-                  disabled={!!saving}
-                  onClick={() => bumpDueDate(d)}
-                  className="rounded border border-gray-700 px-2 py-0.5 text-xs text-gray-500 transition-colors hover:border-gray-500 hover:text-gray-300 disabled:opacity-50"
-                >
-                  +{d}d
-                </button>
-              ))}
-              {lead.due_at && (
-                <span className="text-xs text-gray-600">
-                  due {new Date(lead.due_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                </span>
-              )}
-            </span>
             <button
-              onClick={() => setBookMode("availability")}
-              className="rounded-lg border border-gray-700 px-3 py-1 text-xs font-semibold text-gray-400 transition-colors hover:border-gray-500 hover:text-gray-200"
+              onClick={() => setBookOpen(true)}
+              className="shrink-0 rounded-lg border border-gray-700 bg-transparent px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:bg-gray-800"
             >
-              🕐 Availability
-            </button>
-            <button
-              onClick={() => setBookMode("book")}
-              className="rounded-lg px-3 py-1 text-xs font-semibold text-white transition-all"
-              style={{ background: "linear-gradient(135deg, #FF3A69, #c0294d)" }}
-            >
-              📞 Book Call
+              📅 Book
             </button>
           </div>
 
-          {/* Secondary actions — Blocked lives in the stage dropdown now */}
+          {/* Secondary actions */}
           <div className="flex gap-2">
             <button
               onClick={prev}
@@ -553,7 +477,7 @@ export default function OutreachPage() {
               ‹ Prev
             </button>
             <button
-              onClick={() => markStage("DQ")}
+              onClick={markDq}
               disabled={!!saving}
               className="flex-1 px-3 py-2 bg-gray-900 hover:bg-red-950 border border-gray-800 hover:border-red-900 text-gray-500 hover:text-red-400 rounded-lg transition-colors text-xs font-medium disabled:opacity-50"
             >
@@ -573,12 +497,21 @@ export default function OutreachPage() {
             </a>
           </div>
 
-          {bookMode && (
+          {bookOpen && (
             <BookCallModal
               lead={lead}
-              mode={bookMode}
-              onClose={() => setBookMode(null)}
+              mode="book"
+              onClose={() => setBookOpen(false)}
               onBooked={() => { refresh(); }}
+            />
+          )}
+
+          {scriptsOpen && (
+            <ScriptsSlideOver
+              stage={lead.stage}
+              channel={channel}
+              leadName={lead.name ?? null}
+              onClose={() => setScriptsOpen(false)}
             />
           )}
         </div>
@@ -587,67 +520,88 @@ export default function OutreachPage() {
   );
 }
 
-// Compact port of the extension's stage-filtered script carousel
-// (instagram.js renderScriptsCarousel): variants for the lead's CURRENT stage,
-// right where the DM is written. [name]-style placeholders are filled with the
-// lead's first name; bracketed blanks we can't know stay visible on purpose.
-function StageScripts({ stage, channel, leadName }: { stage: string; channel: Channel; leadName: string | null }) {
+// Stage-filtered scripts in a slide-over — variants for the lead's CURRENT
+// stage, one click from the card without competing with the opener.
+// [name]-style placeholders fill with the lead's first name; bracketed blanks
+// we can't know stay visible on purpose.
+function ScriptsSlideOver({
+  stage,
+  channel,
+  leadName,
+  onClose,
+}: {
+  stage: string;
+  channel: Channel;
+  leadName: string | null;
+  onClose: () => void;
+}) {
   const scripts = scriptsForStage(stage).filter((s) =>
     channel === "email" ? s.category === "email" : s.category !== "email",
   );
-  const [i, setI] = useState(0);
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => { setI(0); setCopied(false); }, [stage, channel, leadName]);
-
-  if (scripts.length === 0) return null;
-  const idx = Math.min(i, scripts.length - 1);
-  const script = scripts[idx];
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const firstName = leadName?.trim().split(/\s+/)[0] || null;
   const fill = (t: string) => (firstName ? t.replace(/\[(first\s*)?name\]/gi, firstName) : t);
-  const text = fill(script.text);
 
-  function copy() {
+  function copy(id: string, text: string) {
     navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
     });
   }
 
   return (
-    <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 space-y-2">
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-gray-500 uppercase tracking-wide">Scripts · {stage}</p>
-        <div className="flex items-center gap-2 text-xs text-gray-600">
+    <div
+      className="fixed inset-0 z-50 flex justify-end"
+      style={{ background: "rgba(3,7,18,0.6)" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full max-w-md h-full overflow-y-auto bg-gray-950 border-l border-gray-800 p-5 space-y-3 animate-slide-in">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold text-white">
+            Scripts · <span style={{ color: stageColor(stage) }}>{stage}</span>
+          </p>
           <button
-            onClick={() => { setI((idx - 1 + scripts.length) % scripts.length); setCopied(false); }}
-            className="px-1.5 rounded border border-gray-800 hover:border-gray-600 hover:text-gray-300 transition-colors"
-            aria-label="Previous script"
+            onClick={onClose}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-500 hover:text-gray-300 bg-gray-900 transition-colors"
+            aria-label="Close scripts"
           >
-            ‹
-          </button>
-          <span>{idx + 1}/{scripts.length}</span>
-          <button
-            onClick={() => { setI((idx + 1) % scripts.length); setCopied(false); }}
-            className="px-1.5 rounded border border-gray-800 hover:border-gray-600 hover:text-gray-300 transition-colors"
-            aria-label="Next script"
-          >
-            ›
+            ✕
           </button>
         </div>
+
+        {scripts.map((script) => {
+          const text = fill(script.text);
+          return (
+            <div key={script.id} className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-gray-400">{script.label}</p>
+                <button
+                  onClick={() => copy(script.id, text)}
+                  className={`shrink-0 text-xs px-3 py-1 rounded border transition-all ${
+                    copiedId === script.id
+                      ? "border-green-700 bg-green-900/30 text-green-400"
+                      : "border-gray-700 text-gray-400 hover:border-gray-500 hover:text-gray-200"
+                  }`}
+                >
+                  {copiedId === script.id ? "Copied!" : "Copy"}
+                </button>
+              </div>
+              {script.subject && (
+                <p className="text-xs text-gray-500">Subject: {fill(script.subject)}</p>
+              )}
+              <p className="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">{text}</p>
+            </div>
+          );
+        })}
+
+        <Link
+          href={`/scripts?stage=${encodeURIComponent(stage)}`}
+          className="block text-center text-xs py-2 border border-gray-800 rounded-lg text-gray-500 hover:text-gray-300 hover:border-gray-700 transition-colors"
+        >
+          All scripts →
+        </Link>
       </div>
-      <p className="text-xs font-semibold text-gray-400">{script.label}</p>
-      {script.subject && (
-        <p className="text-xs text-gray-500">Subject: {fill(script.subject)}</p>
-      )}
-      <p className="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap max-h-36 overflow-y-auto">{text}</p>
-      <button
-        onClick={copy}
-        className="w-full text-xs py-1.5 border border-gray-700 rounded-lg text-gray-400 hover:text-white hover:border-[#FF3A69] transition-colors"
-      >
-        {copied ? "✓ Copied!" : "Copy script"}
-      </button>
     </div>
   );
 }

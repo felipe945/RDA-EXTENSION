@@ -13,6 +13,7 @@ import type { Lead } from "@/hooks/useLeads";
 import { LeadCardSkeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { type LeadPlus } from "@/components/ig";
+import { STAGES, DEAD_STAGES, stageColor } from "@/lib/stages";
 import { ownerLabel as getOwnerLabel } from "@/components/OwnerControl";
 import { RepStatsPanel } from "@/components/RepStatsPanel";
 import InstallExtensionBanner from "@/components/InstallExtensionBanner";
@@ -20,35 +21,22 @@ import InstallExtensionBanner from "@/components/InstallExtensionBanner";
 type UrgencyBucket = "overdue" | "today" | "upcoming" | "booked" | "archived";
 type SourceTab = "all" | "IG" | "Email" | "LinkedIn" | "Manual";
 
-type PipelineFilter =
-  | "all"
-  | "needs_fu"
-  | "new"
-  | "warming"
-  | "dm_sent"
-  | "replied"
-  | "qualifying"
-  | "call_offered"
-  | "booked"
-  | "closed";
+// "all" hides dead leads; "needs_fu" is urgency-based; everything else is an
+// exact canonical stage from @/lib/stages (Contract STAGES — no local lists).
+type PipelineFilter = "all" | "needs_fu" | string;
 
+// "All active" (not "All") — it excludes dead stages, so it must not claim the
+// same word as the source tabs' honest all-leads total.
 const PIPELINE_FILTERS: { key: PipelineFilter; label: string; color: string }[] = [
-  { key: "all",          label: "All",             color: "" },
-  { key: "needs_fu",     label: "Needs Follow Up", color: "#FF3A69" },
-  { key: "new",          label: "New",             color: "#64748b" },
-  { key: "warming",      label: "Warming",         color: "#f59e0b" },
-  { key: "dm_sent",      label: "DM Sent",         color: "#3b82f6" },
-  { key: "replied",      label: "Replied",         color: "#8b5cf6" },
-  { key: "qualifying",   label: "Qualifying",      color: "#06b6d4" },
-  { key: "call_offered", label: "Call Offered",    color: "#10b981" },
-  { key: "booked",       label: "Booked",          color: "#22c55e" },
-  { key: "closed",       label: "Closed",          color: "#6b7280" },
+  { key: "all",      label: "All active",      color: "" },
+  { key: "needs_fu", label: "Needs Follow Up", color: "#FF3A69" },
+  ...STAGES.map((s) => ({ key: s, label: s, color: stageColor(s) })),
 ];
 
 function urgencyBucket(lead: Lead): UrgencyBucket {
-  if (["Closed", "DQ", "Churned"].includes(lead.stage)) return "archived";
-  if (["Booked", "Active"].includes(lead.stage)) return "booked";
-  if (lead.stage === "Replied" || lead.stage === "At Risk") return "today";
+  if (DEAD_STAGES.includes(lead.stage)) return "archived";
+  if (lead.stage === "Booked") return "booked";
+  if (lead.stage === "Replied") return "today";
   if (!lead.due_at) return "upcoming";
   const due = new Date(lead.due_at);
   const now = new Date();
@@ -64,19 +52,26 @@ function needsFollowUp(lead: Lead): boolean {
 }
 
 function pipelineMatch(lead: Lead, filter: PipelineFilter): boolean {
-  switch (filter) {
-    case "all":          return !["Closed", "DQ", "Churned"].includes(lead.stage);
-    case "needs_fu":     return needsFollowUp(lead);
-    case "new":          return lead.stage === "New";
-    case "warming":      return lead.stage === "Warming";
-    case "dm_sent":      return lead.stage === "DM Sent";
-    case "replied":      return lead.stage === "Replied";
-    case "qualifying":   return lead.stage === "Qualifying";
-    case "call_offered": return lead.stage === "Call Offered";
-    case "booked":       return ["Booked", "Active"].includes(lead.stage);
-    case "closed":       return ["Closed", "DQ", "Churned"].includes(lead.stage);
-  }
+  if (filter === "all")      return !DEAD_STAGES.includes(lead.stage);
+  if (filter === "needs_fu") return needsFollowUp(lead);
+  return lead.stage === filter;
 }
+
+// ONE predicate for source tabs — both the tab counts and the filtered list
+// read from it, so a tab's number always equals what clicking it shows.
+function sourceMatch(l: Lead, key: SourceTab): boolean {
+  if (key === "all")      return true;
+  if (key === "IG")       return l.source === "IG" || !!l.ig_username;
+  if (key === "Email")    return l.source === "Email" || !!l.email;
+  if (key === "LinkedIn") return l.source === "LinkedIn" || !!l.linkedin_url;
+  return l.source === "Manual" || (!l.ig_username && !l.email && !l.linkedin_url);
+}
+
+// With 1000+ leads a full render is a 50,000px page. Buckets render at most
+// this many cards up front; a "Show more" button reveals the rest in steps.
+// Bucket header counts always quote grouped[b].length — the TRUE total.
+const BUCKET_RENDER_CAP = 50;
+const BUCKET_RENDER_STEP = 200;
 
 const BUCKET_ORDER: UrgencyBucket[] = ["overdue", "today", "upcoming", "booked", "archived"];
 const BUCKET_LABELS: Record<UrgencyBucket, string> = {
@@ -111,10 +106,12 @@ function BatchResearchButton({ leads }: { leads: Lead[] }) {
     setDone(0);
     for (const lead of leads) {
       try {
+        // force: leads stuck in enriched*/error states still get an opener
+        // (T1's server guarantees generation for every non-complete status)
         await fetch("/api/ai/research-lead", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ leadId: lead.id }),
+          body: JSON.stringify({ leadId: lead.id, force: true }),
         });
       } catch { /* continue on individual failure */ }
       setDone(d => d + 1);
@@ -134,7 +131,11 @@ function BatchResearchButton({ leads }: { leads: Lead[] }) {
 }
 
 export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
-  const { leads: allLeads, loading, refresh } = useLeads(mode);
+  const [scope, setScope] = useState<"mine" | "team">("mine");
+  // Scoping is the SERVER's job (Contract SCOPE): "mine" already returns the
+  // unclaimed pool + my claimed leads. No client-side owner filter on top —
+  // that's what hid 1061 pool leads behind a "1 lead" home view.
+  const { leads, loading, refresh } = useLeads(mode, scope);
   const { members } = useTeam();
   const { data: session } = useSession();
   const [pipelineFilter, setPipelineFilter] = useState<PipelineFilter>("all");
@@ -142,37 +143,25 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
   const [showAddLead, setShowAddLead] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [search, setSearch] = useState("");
-  const [scope, setScope] = useState<"mine" | "team">("mine");
+  const [shownPerBucket, setShownPerBucket] = useState<Partial<Record<UrgencyBucket, number>>>({});
 
   const userId = session?.userId;
-  // The server already scopes what reps receive (C1: cold pool + own). The
-  // toggle is a view convenience for owner/admin only — reps never see it.
+  // "All Team Leads" is a view convenience for owner/admin only — reps never see it.
   const showTeamToggle = canSeeAllLeads(session?.role);
 
   const memberName = (id: string | null): string | undefined =>
     id ? members.find((m) => m.userId === id)?.name : undefined;
 
-  // Hybrid ownership: "Mine" = leads I've claimed (owner_id — stamped by the
-  // server when I send the DM). If userId isn't known yet, don't hide
-  // everything — fall back to showing all so the dashboard never goes blank.
-  const leads =
-    scope === "team" || !userId
-      ? allLeads
-      : allLeads.filter((l) => (l as LeadPlus).owner_id === userId);
-
-  const pendingResearch = leads.filter(
-    (l) => l.research_status === "pending" || l.research_status === "none"
+  // Research All targets every lead that hasn't finished research — not just
+  // "none" (which matched 0 leads once the pipeline started stamping enriched*).
+  // "pending" is excluded: those jobs are already in flight, counted separately
+  // so the banner sentence and the button always quote the same number.
+  const batchLeads = leads.filter(
+    (l) => l.research_status !== "complete" && l.research_status !== "pending"
   );
+  const researchInFlight = leads.filter((l) => l.research_status === "pending").length;
 
-  const sourceFiltered = source === "all"
-    ? leads
-    : leads.filter((l) => {
-        if (source === "IG") return l.source === "IG" || !!l.ig_username;
-        if (source === "Email") return l.source === "Email" || !!l.email;
-        if (source === "LinkedIn") return l.source === "LinkedIn" || !!l.linkedin_url;
-        if (source === "Manual") return l.source === "Manual" || (!l.ig_username && !l.email && !l.linkedin_url);
-        return true;
-      });
+  const sourceFiltered = leads.filter((l) => sourceMatch(l, source));
 
   const searchFiltered = search.trim()
     ? sourceFiltered.filter((l) => {
@@ -212,20 +201,27 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
 
   const needsFUCount = searchFiltered.filter(needsFollowUp).length;
   const repliedCount = searchFiltered.filter((l) => l.stage === "Replied").length;
-  const bookedCount  = searchFiltered.filter((l) => ["Booked", "Active"].includes(l.stage)).length;
-  const batchLeads   = leads.filter(l => l.research_status === "none");
+  const bookedCount  = searchFiltered.filter((l) => l.stage === "Booked").length;
 
   return (
-    <div className="space-y-5">
+    // pb-24 keeps the fixed Import/Add-Lead buttons from covering the last card
+    <div className="space-y-5 pb-24">
       <InstallExtensionBanner />
 
-      {/* Research pending banner */}
-      {pendingResearch.length > 0 && (
+      {/* Research banner — the sentence and the Research All button quote the
+          SAME set (batchLeads); in-flight jobs are labeled separately. */}
+      {(batchLeads.length > 0 || researchInFlight > 0) && (
         <div className="flex items-center justify-between rounded-xl border px-4 py-3" style={{ background: '#0F1420', borderColor: '#1A2235' }}>
           <div className="flex items-center gap-3">
             <span className="w-2 h-2 rounded-full bg-[#FF3A69] animate-pulse-dot shrink-0" />
             <span className="text-sm text-gray-300">
-              <span className="font-medium text-white">{pendingResearch.length} leads</span> pending AI research
+              {batchLeads.length > 0 && (
+                <><span className="font-medium text-white">{batchLeads.length} leads</span> need AI research</>
+              )}
+              {batchLeads.length > 0 && researchInFlight > 0 && <span className="text-gray-600"> · </span>}
+              {researchInFlight > 0 && (
+                <><span className="font-medium text-white">{researchInFlight}</span> researching now</>
+              )}
             </span>
           </div>
           <div className="flex gap-2">
@@ -260,9 +256,9 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
           )}
           {repliedCount > 0 && (
             <button
-              onClick={() => setPipelineFilter(pipelineFilter === "replied" ? "all" : "replied")}
+              onClick={() => setPipelineFilter(pipelineFilter === "Replied" ? "all" : "Replied")}
               className="card-hover rounded-xl border p-4 text-left transition-colors relative overflow-hidden"
-              style={pipelineFilter === "replied"
+              style={pipelineFilter === "Replied"
                 ? { borderColor: '#A78BFA', background: 'linear-gradient(135deg, rgba(167,139,250,0.12), rgba(167,139,250,0.04))' }
                 : { borderColor: '#1A2235', background: 'linear-gradient(135deg, #0F1420, #070B12)' }}>
               <div className="flex items-start justify-between mb-2">
@@ -275,9 +271,9 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
           )}
           {bookedCount > 0 && (
             <button
-              onClick={() => setPipelineFilter(pipelineFilter === "booked" ? "all" : "booked")}
+              onClick={() => setPipelineFilter(pipelineFilter === "Booked" ? "all" : "Booked")}
               className="card-hover rounded-xl border p-4 text-left transition-colors relative overflow-hidden"
-              style={pipelineFilter === "booked"
+              style={pipelineFilter === "Booked"
                 ? { borderColor: '#22C55E', background: 'linear-gradient(135deg, rgba(34,197,94,0.1), rgba(34,197,94,0.03))' }
                 : { borderColor: '#1A2235', background: 'linear-gradient(135deg, #0F1420, #070B12)' }}>
               <div className="flex items-start justify-between mb-2">
@@ -291,20 +287,22 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
         </div>
       )}
 
-      {/* My Leads / Team Leads toggle — owner/admin only */}
+      {/* My Queue (pool + claimed) / All Team Leads toggle — owner/admin only */}
       {showTeamToggle && (
         <div className="flex rounded-lg border border-[#1A2235] p-0.5 w-fit">
           <button
             onClick={() => setScope("mine")}
+            title="The unclaimed pool plus leads you've claimed"
             className={`rounded-md px-3 py-1.5 text-xs transition-colors ${scope === "mine" ? "bg-[#1E2640] text-[#E2E8F0]" : "text-[#94A3B8]"}`}
           >
-            My Leads
+            My Queue
           </button>
           <button
             onClick={() => setScope("team")}
+            title="Every lead in the org, including teammates' claims"
             className={`rounded-md px-3 py-1.5 text-xs transition-colors ${scope === "team" ? "bg-[#1E2640] text-[#E2E8F0]" : "text-[#94A3B8]"}`}
           >
-            Team Leads
+            All Team Leads
           </button>
         </div>
       )}
@@ -316,15 +314,7 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
       {/* Source tabs */}
       <div className="flex items-center gap-1 border-b pb-1 overflow-x-auto" style={{ borderColor: '#1A2235' }}>
         {SOURCE_TABS.map(({ key, label, icon }) => {
-          const count = key === "all"
-            ? leads.length
-            : leads.filter((l) => {
-                if (key === "IG") return l.source === "IG" || !!l.ig_username;
-                if (key === "Email") return l.source === "Email" || !!l.email;
-                if (key === "LinkedIn") return l.source === "LinkedIn" || !!l.linkedin_url;
-                if (key === "Manual") return l.source === "Manual";
-                return true;
-              }).length;
+          const count = leads.filter((l) => sourceMatch(l, key)).length;
           if (count === 0 && key !== "all") return null;
           return (
             <button
@@ -392,24 +382,37 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
         })}
       </div>
 
-      {/* Lead groups */}
-      {visibleBuckets.map((b) => (
-        <section key={b}>
-          <h2 className={`text-xs font-semibold uppercase tracking-widest mb-3 ${BUCKET_COLORS[b]}`}>
-            {BUCKET_LABELS[b]} <span className="opacity-60">({grouped[b].length})</span>
-          </h2>
-          <div className="space-y-2">
-            {grouped[b].map((lead) => (
-              <LeadCard
-                key={lead.id}
-                lead={lead}
-                urgency={b}
-                ownerLabel={getOwnerLabel(lead as LeadPlus, userId, memberName)}
-              />
-            ))}
-          </div>
-        </section>
-      ))}
+      {/* Lead groups — render capped per bucket; header count is the true total */}
+      {visibleBuckets.map((b) => {
+        const renderLimit = shownPerBucket[b] ?? BUCKET_RENDER_CAP;
+        const rendered = grouped[b].slice(0, renderLimit);
+        const hidden = grouped[b].length - rendered.length;
+        return (
+          <section key={b}>
+            <h2 className={`text-xs font-semibold uppercase tracking-widest mb-3 ${BUCKET_COLORS[b]}`}>
+              {BUCKET_LABELS[b]} <span className="opacity-60">({grouped[b].length})</span>
+            </h2>
+            <div className="space-y-2">
+              {rendered.map((lead) => (
+                <LeadCard
+                  key={lead.id}
+                  lead={lead}
+                  urgency={b}
+                  ownerLabel={getOwnerLabel(lead as LeadPlus, userId, memberName)}
+                />
+              ))}
+            </div>
+            {hidden > 0 && (
+              <button
+                onClick={() => setShownPerBucket((s) => ({ ...s, [b]: renderLimit + BUCKET_RENDER_STEP }))}
+                className="mt-2 w-full rounded-lg border border-[#1A2235] py-2 text-xs text-gray-500 transition-colors hover:border-[#2A3554] hover:text-gray-300"
+              >
+                Show {Math.min(hidden, BUCKET_RENDER_STEP)} more ({hidden.toLocaleString()} hidden)
+              </button>
+            )}
+          </section>
+        );
+      })}
 
       {pipelineFiltered.length === 0 && (
         leads.length === 0 ? (
