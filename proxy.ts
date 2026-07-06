@@ -14,6 +14,7 @@
 //   - /api/leads/batch-enrich, /api/salesforce/batch
 //                            CLI/script callers, enforce their own `authorization` secret
 //   - /api/ai/research-lead  called server-to-server (Inngest fn + ig-events fallback), no cookie
+//   - /api/opener            Chrome extension AI opener — public generator (open CORS, no cookie)
 //   - /api/log               logging sink (may fire before a session exists)
 //   - /api/invites/preview   login-page invite lookup; the visitor isn't signed
 //                            in yet — the uuid invite token is the credential
@@ -43,6 +44,7 @@ const OPEN_API_PREFIXES = [
   "/api/stats",
   "/api/salesforce/batch",
   "/api/ai/research-lead",
+  "/api/opener",
   "/api/log",
   "/api/invites/preview",
   "/api/extension",
