@@ -1637,8 +1637,13 @@
 
     rebuildPicker(scripts);
 
-    // Async: fetch AI opener from dashboard, update textarea when ready
-    getSettings().then(({ dashboardUrl: dUrl }) => {
+    // Async: fetch AI opener via the background SW, then update the textarea.
+    // The request MUST go through the SW: T1's /api/opener CORS allowlist only
+    // admits Origin chrome-extension://<id> (the SW's origin). A direct fetch
+    // from this content script carries Origin: https://www.instagram.com and is
+    // rejected, so the opener would always fail closed. The SW owns dashboardUrl
+    // and the Bearer repToken, so neither is passed here.
+    (() => {
       const leadId = opts.leadId || opts.lead?.id;
       const followerCount = (() => {
         try {
@@ -1647,24 +1652,22 @@
           return m ? m[1] : "";
         } catch { return ""; }
       })();
-      const url = `${dUrl}/api/opener?channel=${encodeURIComponent(channel)}&ig_username=${encodeURIComponent(username)}&name=${encodeURIComponent(displayName || username)}&bio=${encodeURIComponent(bio.slice(0,200))}&followers=${encodeURIComponent(followerCount)}${leadId ? `&lead_id=${leadId}` : ""}`;
+      const params = {
+        channel,
+        ig_username: username,
+        name: displayName || username,
+        bio: bio.slice(0, 200),
+        followers: followerCount,
+        ...(leadId ? { lead_id: leadId } : {}),
+      };
 
-      const ctrl = new AbortController();
-      const abortTimer = setTimeout(() => ctrl.abort(), 9000);
-
-      repAuthHeader()
-        .then(auth => fetch(url, { signal: ctrl.signal, headers: auth }))
-        .then(r => {
-          clearTimeout(abortTimer);
-          if (!r.ok) throw new Error(`opener API ${r.status}`);
-          return r.json();
-        })
-        .then(data => {
-          if (!data?.opener) { aiBadge.remove(); return; }
+      chrome.runtime.sendMessage({ type: "FETCH_OPENER", params })
+        .then(res => {
+          if (!res?.ok || !res.opener) { aiBadge.remove(); return; }
           aiBadge.innerHTML = `<span style="color:#FF3A69">✨</span> AI opener`;
           aiBadge.style.animation = "none";
           ta.style.borderColor = "#FF3A6944";
-          const aiScripts = [{ label: "✨ AI", text: data.opener }, ...scripts];
+          const aiScripts = [{ label: "✨ AI", text: res.opener }, ...scripts];
           if (!sent && !clicked) {
             ta.value = aiScripts[0].text;
             autoResizeTa();
@@ -1672,12 +1675,11 @@
           rebuildPicker(aiScripts);
         })
         .catch((err) => {
-          clearTimeout(abortTimer);
           console.warn("[FanBasis] opener fetch failed:", err?.message || err);
           aiBadge.innerHTML = `<span style="color:#f59e0b">⚠ AI failed — using template</span>`;
           setTimeout(() => { try { aiBadge.remove(); } catch {} }, 3000);
         });
-    });
+    })();
 
     const btnRow = document.createElement("div");
     btnRow.style.cssText = "display:flex;gap:6px;margin-top:8px";
