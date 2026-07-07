@@ -299,6 +299,11 @@
     return () => clearInterval(timer);
   }
 
+  // Signed-in rep from the background-cached bootstrap ({id, email, name,
+  // personalIgUsername}) — refreshed on every getSettings() call, which runs
+  // before each card render, so sync readers (chips, tracker pills) can use it.
+  let myRep = null;
+
   async function getSettings() {
     // Bootstrap (cached by background after sign-in) wins over legacy storage.sync
     const [sync, local] = await Promise.all([
@@ -312,6 +317,7 @@
       new Promise((r) => chrome.storage.local.get({ fb_bootstrap: null, fb_rep_token: null }, r)),
     ]);
     const boot = local.fb_bootstrap;
+    myRep = boot?.rep || null;
     return {
       dashboardUrl: healUrl(boot?.dashboardUrl || sync.dashboardUrl),
       igSecret: sync.igSecret,
@@ -319,6 +325,7 @@
       calendarUrl: sync.calendarUrl,
       personalIgUsername: boot?.rep?.personalIgUsername || sync.personalIgUsername,
       fanbasisHandle: boot?.fanbasisHandle || sync.fanbasisHandle,
+      rep: boot?.rep || null,
     };
   }
 
@@ -1061,21 +1068,37 @@
   // ── Channel tracking helpers ────────────────────────────────────────────────
 
   function chTime(ts) {
+    if (typeof ts === "string") ts = Date.parse(ts); // server stamps ISO; legacy client wrote epoch ms
     const d = Date.now() - ts;
-    if (d < 3600000) return "now";
+    if (!Number.isFinite(d) || d < 3600000) return "now";
     if (d < 86400000) return Math.floor(d / 3600000) + "h ago";
     return Math.floor(d / 86400000) + "d ago";
   }
 
-  async function markChannelSent(leadId, channel, current, dashboardUrl) {
-    const updated = { ...(current || {}), [channel]: { sent: true, sentAt: Date.now() } };
+  // Contract TOUCH: per-rep touch write, routed through the background SW.
+  // The server stamps WHO from the Bearer token — the client never composes
+  // the whole outreach_channels object (no clobbering other reps' entries).
+  // Resolves to the server-merged outreach_channels, or null on failure.
+  async function markChannelSent(leadId, channel, sent = true) {
+    const r = await chrome.runtime.sendMessage({ type: "TOUCH_LEAD", id: leadId, channel, sent }).catch(() => null);
+    return r?.ok ? r.outreach_channels : null;
+  }
+
+  // Which of the rep's two IG identities is active right now — "ig_fanbasis",
+  // "ig_personal", or null when the account can't be confirmed (Contract B:
+  // only a fresh interceptor signal or live DOM detection is trusted).
+  async function detectActiveSendChannel() {
     try {
-      await fetch(`${dashboardUrl}/api/leads`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", ...(await repAuthHeader()) },
-        body: JSON.stringify({ id: leadId, outreach_channels: updated }),
-      });
-    } catch { /* ignore */ }
+      const [{ personalIgUsername, fanbasisHandle }, { activeIgAccount, activeIgAccountTs }] = await Promise.all([
+        getSettings(),
+        new Promise(r => chrome.storage.local.get({ activeIgAccount: "", activeIgAccountTs: 0 }, r)),
+      ]);
+      const cur = (freshActiveIgAccount(activeIgAccount, activeIgAccountTs) || detectCurrentIgAccountFromDom() || "").toLowerCase();
+      if (!cur) return null;
+      if (cur === (fanbasisHandle || "fanbasis").replace(/^@/, "").toLowerCase()) return "ig_fanbasis";
+      if (personalIgUsername && cur === personalIgUsername.replace(/^@/, "").toLowerCase()) return "ig_personal";
+      return null;
+    } catch { return null; }
   }
 
   // F4: only the channels this extension actually records — matches the
@@ -1092,11 +1115,17 @@
 
   function renderChannelTracker(container, channels) {
     const chs = channels || {};
+    // Personal pill shows MY per-rep touch (ig_personal_by), not the team
+    // aggregate; the legacy ig_personal key is the signed-out fallback only.
+    const myId = myRep?.id || null;
+    const chInfo = (k) => (k === "ig_personal" && myId)
+      ? (chs.ig_personal_by || {})[myId]
+      : chs[k];
     const row = document.createElement("div");
     row.id = "fb-ch-tracker";
     row.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px";
     for (const d of CH_DEFS) {
-      const info = chs[d.k];
+      const info = chInfo(d.k);
       const pill = document.createElement("div");
       pill.setAttribute("data-ch", d.k);
       if (info?.sentAt) {
@@ -1782,15 +1811,12 @@
 
       if (opts.channel) {
         const leadId = opts.leadId || opts.lead?.id;
-        const outreachChannels = opts.outreachChannels || opts.lead?.outreach_channels || {};
         if (leadId) {
-          getSettings().then(({ dashboardUrl: dUrl }) => {
-            markChannelSent(leadId, opts.channel, outreachChannels, opts.dashboardUrl || dUrl)
-              .then(() => {
-                markPillSent(card, opts.channel);
-                // Fire FB_DM_SENT after channel is persisted so cache refresh sees the update
-                chrome.runtime.sendMessage({ type: "FB_DM_SENT", username, leadId, channel: opts.channel, currentStage: opts.lead?.stage }).catch(() => {});
-              });
+          markChannelSent(leadId, opts.channel).then(() => {
+            markPillSent(card, opts.channel);
+            // Fire FB_DM_SENT after channel is persisted so cache refresh sees the update
+            // (stage advance inside FB_DM_SENT is gated to ig_fanbasis in background.js)
+            chrome.runtime.sendMessage({ type: "FB_DM_SENT", username, leadId, channel: opts.channel, currentStage: opts.lead?.stage }).catch(() => {});
           });
         } else {
           markPillSent(card, opts.channel);
@@ -2020,11 +2046,12 @@
       function completeBothSends() {
         wrap.remove();
         if (lead?.id) {
+          // Stage write KEPT here: this path always includes a FanBasis send
+          // (the two touches are ig_fanbasis + ig_personal)
           const due = new Date(Date.now() + 3 * 24 * 3600000).toISOString();
           chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "DM Sent", last_contact_at: new Date().toISOString(), due_at: due } }).catch(() => {});
-          const chs = lead.outreach_channels || {};
-          markChannelSent(lead.id, "ig_fanbasis", chs, dashboardUrl).catch(() => {});
-          markChannelSent(lead.id, "ig_personal", chs, dashboardUrl).catch(() => {});
+          markChannelSent(lead.id, "ig_fanbasis");
+          markChannelSent(lead.id, "ig_personal");
           chrome.runtime.sendMessage({ type: "FB_DM_SENT", username, leadId: lead.id, channel: "ig_fanbasis" }).catch(() => {});
           chrome.runtime.sendMessage({ type: "FB_DM_SENT", username, leadId: lead.id, channel: "ig_personal" }).catch(() => {});
         }
@@ -2380,6 +2407,17 @@
       savedDmSentBtn.style.cssText = "flex:1;background:#0f1729;border:1px solid #1e3a5f;border-radius:6px;color:#60a5fa;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
       savedDmSentBtn.addEventListener("click", async () => {
         savedDmSentBtn.textContent = "✓✓"; savedDmSentBtn.disabled = true;
+        // Stage "DM Sent" is FanBasis-only. A quick-mark while on the personal
+        // account records MY per-rep touch and leaves stage/due untouched —
+        // the lead stays queued (locked model: "personal-first stays queued").
+        const ch = await detectActiveSendChannel();
+        if (ch === "ig_personal") {
+          await markChannelSent(lead.id, "ig_personal");
+          savedDmSentBtn.textContent = "✓ Personal";
+          navigateToNextLead(b, username, lead.id, dashboardUrl);
+          return;
+        }
+        if (ch === "ig_fanbasis") markChannelSent(lead.id, "ig_fanbasis");
         const due = new Date(Date.now() + 3 * 24 * 3600000).toISOString();
         const r = await chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "DM Sent", last_contact_at: new Date().toISOString(), due_at: due } }).catch(() => null);
         if (r?.ok === false) { savedDmSentBtn.textContent = "✓ Mark Sent"; savedDmSentBtn.disabled = false; return; }
@@ -2411,7 +2449,12 @@
 
     if (autoDm) {
       const afterSendFn = secondTouch ? () => {
-        chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: secondTouch.leadId, updates: { stage: "DM Sent", last_contact_at: new Date().toISOString(), due_at: new Date(Date.now() + 3*24*3600000).toISOString() } }).catch(() => {});
+        // Stage moves only when the SECOND touch went out from the FanBasis
+        // account (autoDm = its channel). A personal second touch leaves stage
+        // alone — the FanBasis first touch already advanced it via FB_DM_SENT.
+        if (autoDm === "ig_fanbasis") {
+          chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: secondTouch.leadId, updates: { stage: "DM Sent", last_contact_at: new Date().toISOString(), due_at: new Date(Date.now() + 3*24*3600000).toISOString() } }).catch(() => {});
+        }
         const done = document.createElement("div");
         done.style.cssText = "margin-top:8px;padding:8px 10px;background:#0d2b0d;border:1px solid #166534;border-radius:7px;color:#4ade80;font-size:11px;font-weight:600;text-align:center";
         done.textContent = "✓ Both channels done — DM Sent!";
@@ -2578,9 +2621,15 @@
     const outreachChannels = lead.outreach_channels || {};
     renderChannelTracker(b, outreachChannels);
 
-    // Touch chips — tap to mark each account's DM done without the full wizard
+    // Touch chips — tap to mark each account's DM done without the full wizard.
+    // Personal = MY touch (per-rep ig_personal_by map, keyed by rep id); the
+    // legacy ig_personal aggregate only counts when signed out (no rep id).
+    const myRepId = myRep?.id || null;
+    const persBy = outreachChannels.ig_personal_by || {};
     let fbChipDone = !!(outreachChannels.ig_fanbasis?.sent);
-    let persChipDone = !!(outreachChannels.ig_personal?.sent);
+    let persChipDone = myRepId
+      ? !!persBy[myRepId]?.sent
+      : !!(outreachChannels.ig_personal?.sent);
     const touchChips = document.createElement("div");
     touchChips.style.cssText = "display:flex;gap:6px;margin-bottom:8px";
     const fbChip = document.createElement("button");
@@ -2592,7 +2641,7 @@
       fbChip.style.background = fbChipDone ? "#0d2b0d" : "#151B2E";
       fbChip.style.borderColor = fbChipDone ? "#166534" : "#2A3554";
       fbChip.style.color = fbChipDone ? "#4ade80" : "#5A6274";
-      if (fbChipDone) chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { outreach_channels: { ...outreachChannels, ig_fanbasis: { sent: true, sentAt: Date.now() } } } }).catch(() => {});
+      markChannelSent(lead.id, "ig_fanbasis", fbChipDone); // server-merged; supports un-toggle
     });
     const persChip = document.createElement("button");
     persChip.textContent = (persChipDone ? "✓" : "○") + " Pers.";
@@ -2603,7 +2652,7 @@
       persChip.style.background = persChipDone ? "#0d2b0d" : "#151B2E";
       persChip.style.borderColor = persChipDone ? "#166534" : "#2A3554";
       persChip.style.color = persChipDone ? "#4ade80" : "#5A6274";
-      if (persChipDone) chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { outreach_channels: { ...outreachChannels, ig_personal: { sent: true, sentAt: Date.now() } } } }).catch(() => {});
+      markChannelSent(lead.id, "ig_personal", persChipDone); // writes only MY per-rep entry
     });
     touchChips.appendChild(fbChip);
     touchChips.appendChild(persChip);
@@ -2618,6 +2667,17 @@
     dmSentBtn.style.cssText = "width:100%;background:#0d2b0d;border:1px solid #166534;border-radius:8px;color:#4ade80;font-size:12px;font-weight:600;padding:8px;cursor:pointer;margin-bottom:6px";
     dmSentBtn.addEventListener("click", async () => {
       dmSentBtn.textContent = "Saving…"; dmSentBtn.disabled = true;
+      // Stage "DM Sent" is FanBasis-only. A quick-mark while on the personal
+      // account records MY per-rep touch and leaves stage/due untouched —
+      // the lead stays queued (locked model: "personal-first stays queued").
+      const ch = await detectActiveSendChannel();
+      if (ch === "ig_personal") {
+        await markChannelSent(lead.id, "ig_personal");
+        dmSentBtn.textContent = "✓ Personal";
+        navigateToNextLead(b, username, lead.id, dashboardUrl);
+        return;
+      }
+      if (ch === "ig_fanbasis") markChannelSent(lead.id, "ig_fanbasis");
       const due = new Date(Date.now() + 3 * 24 * 3600000).toISOString();
       const r = await chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "DM Sent", last_contact_at: new Date().toISOString(), due_at: due } }).catch(() => null);
       if (r?.ok === false) { dmSentBtn.textContent = "✓ DM Sent"; dmSentBtn.disabled = false; return; }
@@ -2771,9 +2831,13 @@
     if (!autoDm) navigateToNextLead(b, username, lead?.id, dashboardUrl);
 
     if (autoDm) {
-      const outreachChannels2 = lead.outreach_channels || {};
       const afterSendFn = secondTouch ? () => {
-        chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: secondTouch.leadId, updates: { stage: "DM Sent", last_contact_at: new Date().toISOString(), due_at: new Date(Date.now() + 3*24*3600000).toISOString() } }).catch(() => {});
+        // Stage moves only when the SECOND touch went out from the FanBasis
+        // account (autoDm = its channel). A personal second touch leaves stage
+        // alone — the FanBasis first touch already advanced it via FB_DM_SENT.
+        if (autoDm === "ig_fanbasis") {
+          chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: secondTouch.leadId, updates: { stage: "DM Sent", last_contact_at: new Date().toISOString(), due_at: new Date(Date.now() + 3*24*3600000).toISOString() } }).catch(() => {});
+        }
         const done = document.createElement("div");
         done.style.cssText = "margin-top:8px;padding:8px 10px;background:#0d2b0d;border:1px solid #166534;border-radius:7px;color:#4ade80;font-size:11px;font-weight:600;text-align:center";
         done.textContent = "✓ Both channels done — DM Sent!";
@@ -2796,7 +2860,7 @@
           }
         });
       } : null;
-      showDmPreview(card, b, username, opener || null, { channel: autoDm, leadId: lead.id, outreachChannels: outreachChannels2, dashboardUrl, lead, crossChannelIntro, afterSend: afterSendFn });
+      showDmPreview(card, b, username, opener || null, { channel: autoDm, leadId: lead.id, dashboardUrl, lead, crossChannelIntro, afterSend: afterSendFn });
     }
   }
 

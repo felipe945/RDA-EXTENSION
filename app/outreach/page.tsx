@@ -127,6 +127,14 @@ export default function OutreachPage() {
           updated_at: now,
         }),
       });
+      // The queue's DM-Sent IS the FanBasis outbound motion — record the shared
+      // FanBasis touch (fire-and-forget) so TouchChips tell the truth. Undo
+      // fires before this timer, so an undone send records nothing.
+      await fetch("/api/leads/touch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: capturedLead.id, channel: "ig_fanbasis" }),
+      }).catch(() => {});
       if (capturedOpener || capturedNote) {
         await fetch("/api/messages", {
           method: "POST",

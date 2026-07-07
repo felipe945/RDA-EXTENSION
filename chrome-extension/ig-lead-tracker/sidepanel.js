@@ -247,6 +247,7 @@ let fbChannelDone = {};   // { leadId: { fb: boolean, pers: boolean } }
 let researchPollTimer = null;
 let fanbasisHandle = "";
 let personalIgUsername = "";
+let myRepId = "";        // signed-in rep id (bootstrap) — keys the per-rep ig_personal_by map
 let calendarUrl = "";
 let quickSaveTabId = null;
 
@@ -862,10 +863,13 @@ function renderOutreach() {
   const followers = fmtFollowers(lead.follower_count);
   const isPending = lead.research_status === "pending";
 
-  // Sync touch chips from backend outreach_channels (written by IG card's markChannelSent)
+  // Sync touch chips from backend outreach_channels (written via TOUCH_LEAD).
+  // Personal = MY per-rep entry (ig_personal_by[repId]); the legacy ig_personal
+  // aggregate only counts when signed out — another rep's touch stays empty for me.
   const outreachChs = lead.outreach_channels || {};
+  const myPersTouch = myRepId ? outreachChs.ig_personal_by?.[myRepId] : outreachChs.ig_personal;
   if (outreachChs.ig_fanbasis?.sent && !getChannelDone(lead.id).fb) setChannelDone(lead.id, "fb", true);
-  if (outreachChs.ig_personal?.sent && !getChannelDone(lead.id).pers) setChannelDone(lead.id, "pers", true);
+  if (myPersTouch?.sent && !getChannelDone(lead.id).pers) setChannelDone(lead.id, "pers", true);
 
   // Two-touch chip state (IG only)
   const { fb: fbDone, pers: persDone } = getChannelDone(lead.id);
@@ -882,10 +886,19 @@ function renderOutreach() {
   // Channel sent log pills (from persisted outreach_channels)
   const chSentPills = [];
   if (outreachChs.ig_fanbasis?.sent) {
+    const who = outreachChs.ig_fanbasis.byName ? ` ${esc(outreachChs.ig_fanbasis.byName)}` : "";
     const t = outreachChs.ig_fanbasis.sentAt ? ` · ${relTime(outreachChs.ig_fanbasis.sentAt)}` : "";
-    chSentPills.push(`<span style="font-size:10px;padding:2px 8px;border-radius:5px;background:#0d2b0d;border:1px solid #166534;color:#4ade80;white-space:nowrap">📸 FB ✓${t}</span>`);
+    chSentPills.push(`<span style="font-size:10px;padding:2px 8px;border-radius:5px;background:#0d2b0d;border:1px solid #166534;color:#4ade80;white-space:nowrap">📸 FB ✓${who}${t}</span>`);
   }
-  if (outreachChs.ig_personal?.sent) {
+  // Personal pills are per-rep: one entry per rep who touched from their own IG
+  const persTouches = Object.values(outreachChs.ig_personal_by || {}).filter((e) => e?.sent);
+  if (persTouches.length) {
+    const names = persTouches.map((e) => e.name).filter(Boolean).map(esc).join(", ");
+    const latest = Math.max(...persTouches.map((e) => new Date(e.sentAt || 0).getTime() || 0));
+    const t = latest ? ` · ${relTime(latest)}` : "";
+    chSentPills.push(`<span style="font-size:10px;padding:2px 8px;border-radius:5px;background:#0d2b0d;border:1px solid #166534;color:#4ade80;white-space:nowrap">📸 Pers. ✓${names ? ` ${names}` : ""}${t}</span>`);
+  } else if (outreachChs.ig_personal?.sent) {
+    // Legacy aggregate — rows touched before the per-rep model
     const t = outreachChs.ig_personal.sentAt ? ` · ${relTime(outreachChs.ig_personal.sentAt)}` : "";
     chSentPills.push(`<span style="font-size:10px;padding:2px 8px;border-radius:5px;background:#0d2b0d;border:1px solid #166534;color:#4ade80;white-space:nowrap">📸 Pers. ✓${t}</span>`);
   }
@@ -1101,58 +1114,70 @@ function renderOutreach() {
     openSendBtn.addEventListener("click", () => {
       if (opener) navigator.clipboard.writeText(opener).catch(() => {});
       openInIgTab(openSendBtn.dataset.url);
-      // Auto-mark LinkedIn channel sent when clicking Open LinkedIn
+      // Auto-mark LinkedIn channel sent when clicking Open LinkedIn.
+      // TOUCH_LEAD (server-merged): a whole-object PATCH here would clobber
+      // other reps' per-rep ig_personal_by entries.
       if (outreachChannel === "linkedin" && lead.id) {
-        const updated = { ...(lead.outreach_channels || {}), linkedin: { sent: true, sentAt: Date.now() } };
-        chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { outreach_channels: updated } }).catch(() => {});
+        chrome.runtime.sendMessage({ type: "TOUCH_LEAD", id: lead.id, channel: "linkedin", sent: true }).catch(() => {});
       }
     });
   }
 
-  // Touch chips — toggle in-memory state AND persist to backend
+  // Touch chips — toggle in-memory state AND persist via TOUCH_LEAD (Contract
+  // TOUCH: server stamps rep identity from the token; personal writes land in
+  // MY ig_personal_by entry only). sent:false supports un-toggling.
   document.getElementById("fbChip")?.addEventListener("click", () => {
     const newVal = !getChannelDone(lead.id).fb;
     setChannelDone(lead.id, "fb", newVal);
-    if (newVal && lead.id) {
-      const updated = { ...(lead.outreach_channels || {}), ig_fanbasis: { sent: true, sentAt: Date.now() } };
-      chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { outreach_channels: updated } }).catch(() => {});
+    if (lead.id) {
+      chrome.runtime.sendMessage({ type: "TOUCH_LEAD", id: lead.id, channel: "ig_fanbasis", sent: newVal }).catch(() => {});
+      // Optimistic in-memory update so the sync block above doesn't flip an
+      // un-toggled chip back on before the refreshed cache lands
+      lead.outreach_channels = { ...(lead.outreach_channels || {}), ig_fanbasis: { ...(lead.outreach_channels?.ig_fanbasis || {}), sent: newVal, sentAt: Date.now() } };
     }
     renderOutreach();
   });
   document.getElementById("persChip")?.addEventListener("click", () => {
     const newVal = !getChannelDone(lead.id).pers;
     setChannelDone(lead.id, "pers", newVal);
-    if (newVal && lead.id) {
-      const updated = { ...(lead.outreach_channels || {}), ig_personal: { sent: true, sentAt: Date.now() } };
-      chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { outreach_channels: updated } }).catch(() => {});
+    if (lead.id) {
+      chrome.runtime.sendMessage({ type: "TOUCH_LEAD", id: lead.id, channel: "ig_personal", sent: newVal }).catch(() => {});
+      // Optimistic in-memory update of MY per-rep entry (or the legacy
+      // aggregate when signed out) so the sync block doesn't flip it back
+      const chs = { ...(lead.outreach_channels || {}) };
+      if (myRepId) {
+        chs.ig_personal_by = { ...(chs.ig_personal_by || {}), [myRepId]: { ...(chs.ig_personal_by?.[myRepId] || {}), sent: newVal, sentAt: Date.now() } };
+      } else {
+        chs.ig_personal = { ...(chs.ig_personal || {}), sent: newVal, sentAt: Date.now() };
+      }
+      lead.outreach_channels = chs;
     }
     renderOutreach();
   });
 
-  // Mark DM Sent — advance stage + persist channel sent
+  // Mark DM Sent — stage "DM Sent" is FanBasis-only. Channel touches are
+  // already persisted per-rep when the chips are toggled (TOUCH_LEAD); this
+  // button only moves the stage. A personal-only touch leaves stage/due
+  // untouched and the lead STAYS queued (locked model: personal-first).
   document.getElementById("markSentBtn").addEventListener("click", async (e) => {
     const btn = e.currentTarget;
     if (btn.disabled) return;
+    const chipsDone = getChannelDone(lead.id);
+    if (outreachChannel === "ig" && chipsDone.pers && !chipsDone.fb) {
+      spToast("Personal touch saved — lead stays queued until the FanBasis DM", false);
+      return;
+    }
     btn.textContent = "Saving…";
     btn.disabled = true;
-    const due = new Date(Date.now() + 3 * 24 * 3600000).toISOString();
-    // Record the account(s) actually used — the toggled touch chips — never a
-    // hardcoded ig_fanbasis. No chip marked → neutral "ig".
-    const stamp = { sent: true, sentAt: Date.now() };
-    let chUpdate;
-    if (outreachChannel === "linkedin") {
-      chUpdate = { linkedin: stamp };
-    } else {
-      const chipsDone = getChannelDone(lead.id);
-      chUpdate = {};
-      if (chipsDone.fb) chUpdate.ig_fanbasis = stamp;
-      if (chipsDone.pers) chUpdate.ig_personal = stamp;
-      if (!chipsDone.fb && !chipsDone.pers) chUpdate.ig = stamp;
+    // LinkedIn has no chips — quick-mark its touch here (server-merged)
+    if (outreachChannel === "linkedin" && lead.id) {
+      chrome.runtime.sendMessage({ type: "TOUCH_LEAD", id: lead.id, channel: "linkedin", sent: true }).catch(() => {});
     }
+    const due = new Date(Date.now() + 3 * 24 * 3600000).toISOString();
     const result = await chrome.runtime.sendMessage({
       type: "UPDATE_LEAD",
       id: btn.dataset.id,
-      updates: { stage: "DM Sent", last_contact_at: new Date().toISOString(), due_at: due, outreach_channels: { ...(lead.outreach_channels || {}), ...chUpdate } },
+      updates: { stage: "DM Sent", last_contact_at: new Date().toISOString(), due_at: due },
     });
     if (result?.ok === false) {
       btn.textContent = "✓ DM Sent";
@@ -1355,6 +1380,7 @@ async function loadData() {
   dashboardUrl = s.dashboardUrl || DEFAULT_URL;
   fanbasisHandle = s.fanbasisHandle || "";
   personalIgUsername = s.personalIgUsername || "";
+  myRepId = s.rep?.id || "";
   calendarUrl = s.calendarUrl || "";
   repToken = s.repToken || "";
   renderAuth(s);

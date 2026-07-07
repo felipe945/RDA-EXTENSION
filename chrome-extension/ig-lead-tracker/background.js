@@ -280,6 +280,36 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         break;
       }
 
+      // Contract TOUCH: per-rep channel touch. The server stamps WHO from the
+      // Bearer token — the client never sends rep identity and never composes
+      // the whole outreach_channels object (no clobber of other reps' entries).
+      case "TOUCH_LEAD": {
+        try {
+          const res = await fetch(`${dashboardUrl}/api/leads/touch`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...bearer },
+            body: JSON.stringify({ leadId: msg.id, channel: msg.channel, sent: msg.sent !== false }),
+          });
+          if (!res.ok) throw new Error(String(res.status));
+          const data = await res.json();
+          // Optimistic cache update with the server-merged shape so chips
+          // re-read fresh outreach_channels before the delayed refresh lands
+          const target = cache.leads.find((l) => l.id === msg.id);
+          if (target && data.outreach_channels) target.outreach_channels = data.outreach_channels;
+          await chrome.storage.local.set({ fb_cache: cache });
+          chrome.tabs.query({ url: "https://www.instagram.com/*" }, (tabs) => {
+            for (const tab of (tabs || [])) {
+              chrome.tabs.sendMessage(tab.id, { type: "LEAD_UPDATED", leadId: msg.id }).catch(() => {});
+            }
+          });
+          setTimeout(refreshCache, 1500);
+          sendResponse({ ok: true, outreach_channels: data.outreach_channels });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+        break;
+      }
+
       // C4: server-side snooze — POST /api/leads/:id/snooze { until: ISO | null }
       case "SNOOZE_LEAD": {
         try {
@@ -421,10 +451,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             headers: { "Content-Type": "application/json", ...bearer },
             body: JSON.stringify({ channel: channel || "ig_dm", result: "sent", note: `Sent via FanBasis extension (${channelLabel})` }),
           }).catch(() => {});
-          // Advance stage to DM Sent if still in early stages
+          // Advance stage to DM Sent if still in early stages — FanBasis sends
+          // ONLY. A personal-IG send records a per-rep touch and nothing else:
+          // no stage, no due_at (locked model: "personal-first stays queued").
           const matched = cache.leads.find(l => l.id === leadId);
           const effectiveStage = msg.currentStage || matched?.stage;
-          if (effectiveStage && ["New", "Warming"].includes(effectiveStage)) {
+          if (channel === "ig_fanbasis" && effectiveStage && ["New", "Warming"].includes(effectiveStage)) {
             const due = new Date(Date.now() + 3 * 24 * 3600000).toISOString();
             fetch(`${dashboardUrl}/api/leads`, {
               method: "PATCH",
