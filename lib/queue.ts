@@ -8,10 +8,16 @@
 // `next/server`, no Node-only imports. Stage sets come from lib/stages.ts
 // (also browser-pure). A minimal structural `QueueLead` type stands in for the
 // full Lead so nothing here depends on the component layer.
-import { DONE_STAGES, CONTACTED_STAGES, DEAD_STAGES } from "@/lib/stages";
+import { STAGES, DONE_STAGES, CONTACTED_STAGES, DEAD_STAGES } from "@/lib/stages";
 
 // Re-export the stage sets so existing `@/lib/queue` importers keep working.
 export { DONE_STAGES, CONTACTED_STAGES, DEAD_STAGES };
+
+// The ordered canonical stage list, exported under the name the extension
+// looks for: instagram.js reads `window.FBQueue.ALL_STAGES` (falling back to
+// its own hardcoded copy only when absent), so shipping it in the bundle is
+// what lets the extension's stage dropdowns track lib/stages.ts automatically.
+export const ALL_STAGES: readonly string[] = STAGES;
 
 export type QueueChannel = "ig" | "email" | "linkedin";
 

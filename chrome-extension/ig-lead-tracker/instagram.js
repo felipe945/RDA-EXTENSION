@@ -141,11 +141,13 @@
 
   // ── Part 2: Floating lead card ─────────────────────────────────────────────
 
-  // F1: canonical 9 stages — matches sidepanel.js ALL_STAGES + lib/stages.ts.
-  // Prefer the bundled FBQueue list when it exports one so this can't drift again.
-  // Legacy stages (Active, Churned) are never selectable; a lead already on one
-  // shows it as a disabled grey option (see stageOptionsHtml).
-  const FALLBACK_STAGES = ["New", "Warming", "DM Sent", "Replied", "Qualifying", "Call Offered", "Booked", "Closed", "DQ"];
+  // Canonical 6 stages — matches sidepanel.js ALL_STAGES + lib/stages.ts
+  // (pruned 9 → 6: Warming/Qualifying/Closed retired). FBQueue.ALL_STAGES is
+  // the bundled canonical list; this fallback only covers an old bundle.
+  // Legacy stages (Warming, Qualifying, Closed, Active, Churned) are never
+  // selectable; a lead already on one shows as a disabled grey option
+  // (see stageOptionsHtml).
+  const FALLBACK_STAGES = ["New", "DM Sent", "Replied", "Call Offered", "Booked", "DQ"];
   const STAGES = (Array.isArray(window.FBQueue?.ALL_STAGES) && window.FBQueue.ALL_STAGES.length)
     ? window.FBQueue.ALL_STAGES
     : FALLBACK_STAGES;
@@ -2418,18 +2420,10 @@
       b.appendChild(repliedBtn);
     }
 
-    if (lead.stage === "Replied") {
-      const replied = document.createElement("button");
-      replied.style.cssText = "background:#FF3A6912;border:1px solid #FF3A6940;border-radius:8px;padding:7px 10px;margin-bottom:10px;display:flex;align-items:center;gap:8px;width:100%;cursor:pointer";
-      replied.innerHTML = `<span style="font-size:14px">💬</span><div style="text-align:left"><span style="color:#E2E8F0;font-size:12px;font-weight:700">Replied!</span><span style="color:#FF3A69;font-size:11px;margin-left:6px">Move to Qualifying →</span></div>`;
-      replied.addEventListener("click", async () => {
-        replied.disabled = true;
-        replied.style.opacity = "0.6";
-        chrome.runtime.sendMessage({ type: "UPDATE_LEAD", id: lead.id, updates: { stage: "Qualifying" } }).catch(() => {});
-        setTimeout(() => updateCardForProfile(), 500);
-      });
-      b.appendChild(replied);
-    }
+    // "Replied" leads used to get a "Move to Qualifying →" button here.
+    // Qualifying was retired with the 9→6 stage prune: the next real step
+    // after a reply is offering a call, and the book/offer flow already sets
+    // "Call Offered" — so the banner is gone rather than writing a dead stage.
 
     if (sfStatus === "customer") {
       const banner = document.createElement("div");

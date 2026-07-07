@@ -5,7 +5,7 @@ import Link from "next/link";
 import type { Lead } from "@/hooks/useLeads";
 import { useAutoSave } from "@/hooks/useAutoSave";
 import { type LeadPlus } from "@/components/ig";
-import { STAGES, isKnownStage } from "@/lib/stages";
+import { STAGES, isKnownStage, stageColor } from "@/lib/stages";
 import { TouchChips } from "@/components/TouchChips";
 import { OwnerControl } from "@/components/OwnerControl";
 import { SnoozeControl } from "@/components/SnoozeControl";
@@ -90,25 +90,32 @@ function OverviewTab({ lead: leadRaw }: { lead: Lead }) {
         <TouchChips lead={lead} />
       </div>
 
-      {/* Stage selector */}
-      <div>
-        <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">Stage</p>
-        <div className="flex gap-1.5 flex-wrap">
+      {/* Stage — advances automatically (send/reply/book/DQ); the quiet select
+          is the rare manual override, not a chip wall. */}
+      <div className="flex items-center gap-3">
+        <p className="text-xs text-gray-500 uppercase tracking-wide">Stage</p>
+        <span
+          className="px-3 py-1 rounded-full text-xs font-medium border"
+          style={{
+            borderColor: `${stageColor(lead.stage)}66`,
+            background: `${stageColor(lead.stage)}1a`,
+            color: stageColor(lead.stage),
+          }}
+        >
+          {lead.stage}
+        </span>
+        <select
+          value={lead.stage}
+          onChange={(e) => patchLead(lead.id, { stage: e.target.value })}
+          aria-label="Change stage"
+          className="ml-auto bg-transparent border border-[#1A2235] rounded-md text-xs text-[#475569] px-2 py-1 hover:border-[#2A3554] hover:text-[#94A3B8] focus:outline-none focus:border-[#3B82F6]"
+        >
           {stages.map((s) => (
-            <button
-              key={s}
-              onClick={() => patchLead(lead.id, { stage: s })}
-              className="px-3 py-1 rounded-full text-xs border transition-colors"
-              style={
-                lead.stage === s
-                  ? { borderColor: '#3B82F6', background: 'rgba(59,130,246,0.12)', color: '#93C5FD' }
-                  : { borderColor: '#1A2235', color: '#475569' }
-              }
-            >
+            <option key={s} value={s} className="bg-[#0F1420]">
               {s}
-            </button>
+            </option>
           ))}
-        </div>
+        </select>
       </div>
 
       {/* Editable fields */}

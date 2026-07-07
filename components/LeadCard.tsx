@@ -200,25 +200,32 @@ export default function LeadCard({ lead: leadProp, urgency, ownerLabel }: { lead
           className="mt-3 space-y-3 animate-slide-in"
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Stage selector */}
-          <div className="flex gap-1 flex-wrap">
-            {stages.map((s) => {
-              const color = stageColor(s);
-              const isActive = lead.stage === s;
-              return (
-                <button
-                  key={s}
-                  onClick={() => updateStage(s)}
-                  className="px-2 py-0.5 rounded text-xs border transition-colors"
-                  style={isActive
-                    ? { borderColor: color, color, background: `${color}22` }
-                    : { borderColor: "#1E2640", color: "#475569" }
-                  }
-                >
+          {/* Stage — auto-advances (send/reply/book/DQ); one quiet select for
+              the rare manual override instead of a chip wall */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">Stage:</span>
+            <span
+              className="px-2 py-0.5 rounded text-xs font-medium border"
+              style={{
+                borderColor: `${stageColor(lead.stage)}66`,
+                background: `${stageColor(lead.stage)}1a`,
+                color: stageColor(lead.stage),
+              }}
+            >
+              {lead.stage}
+            </span>
+            <select
+              value={lead.stage}
+              onChange={(e) => updateStage(e.target.value)}
+              aria-label="Change stage"
+              className="bg-transparent border border-[#1E2640] rounded text-xs text-[#475569] px-1.5 py-0.5 hover:border-[#2A3554] hover:text-[#94A3B8] focus:outline-none"
+            >
+              {stages.map((s) => (
+                <option key={s} value={s} className="bg-[#0F1420]">
                   {s}
-                </button>
-              );
-            })}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Owner — admins get the reassign/release control, reps see the chip */}

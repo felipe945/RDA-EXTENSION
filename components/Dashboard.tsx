@@ -13,7 +13,7 @@ import type { Lead } from "@/hooks/useLeads";
 import { LeadCardSkeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { type LeadPlus } from "@/components/ig";
-import { STAGES, DEAD_STAGES, stageColor } from "@/lib/stages";
+import { DEAD_STAGES } from "@/lib/stages";
 import { ownerLabel as getOwnerLabel } from "@/components/OwnerControl";
 import { RepStatsPanel } from "@/components/RepStatsPanel";
 import InstallExtensionBanner from "@/components/InstallExtensionBanner";
@@ -21,17 +21,11 @@ import InstallExtensionBanner from "@/components/InstallExtensionBanner";
 type UrgencyBucket = "overdue" | "today" | "upcoming" | "booked" | "archived";
 type SourceTab = "all" | "IG" | "Email" | "LinkedIn" | "Manual";
 
-// "all" hides dead leads; "needs_fu" is urgency-based; everything else is an
-// exact canonical stage from @/lib/stages (Contract STAGES — no local lists).
+// "all" hides dead leads; "needs_fu" is urgency-based; a stage name filters
+// exactly. Only the stat cards set this now — the 11-pill stage row was
+// removed (2026-07): it triple-covered what the stat cards + urgency bucket
+// headers already say, and most pills filtered stages nothing writes.
 type PipelineFilter = "all" | "needs_fu" | string;
-
-// "All active" (not "All") — it excludes dead stages, so it must not claim the
-// same word as the source tabs' honest all-leads total.
-const PIPELINE_FILTERS: { key: PipelineFilter; label: string; color: string }[] = [
-  { key: "all",      label: "All active",      color: "" },
-  { key: "needs_fu", label: "Needs Follow Up", color: "#FF3A69" },
-  ...STAGES.map((s) => ({ key: s, label: s, color: stageColor(s) })),
-];
 
 function urgencyBucket(lead: Lead): UrgencyBucket {
   if (DEAD_STAGES.includes(lead.stage)) return "archived";
@@ -358,29 +352,6 @@ export default function Dashboard({ mode }: { mode: "sales" | "csm" }) {
           {searchFiltered.length} result{searchFiltered.length !== 1 ? "s" : ""} for &ldquo;{search}&rdquo;
         </p>
       )}
-
-      {/* Pipeline filter pills */}
-      <div className="flex gap-1.5 flex-wrap">
-        {PIPELINE_FILTERS.map(({ key, label, color }) => {
-          const count = searchFiltered.filter((l) => pipelineMatch(l, key)).length;
-          if (count === 0 && key !== "all") return null;
-          const isActive = pipelineFilter === key;
-          return (
-            <button
-              key={key}
-              onClick={() => setPipelineFilter(key)}
-              style={isActive && color ? { borderColor: color, color } : undefined}
-              className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
-                isActive
-                  ? "bg-gray-800"
-                  : "border-[#1A2235] text-[#475569] hover:border-[#2A3554] hover:text-[#94A3B8]"
-              } ${!color && isActive ? "border-gray-400 text-white" : ""}`}
-            >
-              {label} <span className="opacity-60">{count}</span>
-            </button>
-          );
-        })}
-      </div>
 
       {/* Lead groups — render capped per bucket; header count is the true total */}
       {visibleBuckets.map((b) => {

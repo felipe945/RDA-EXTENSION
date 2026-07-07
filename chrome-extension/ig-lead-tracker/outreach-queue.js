@@ -22,6 +22,7 @@ var FBQueue = (() => {
   // lib/queue.ts
   var queue_exports = {};
   __export(queue_exports, {
+    ALL_STAGES: () => ALL_STAGES,
     CONTACTED_STAGES: () => CONTACTED_STAGES,
     DEAD_STAGES: () => DEAD_STAGES,
     DONE_STAGES: () => DONE_STAGES,
@@ -33,6 +34,14 @@ var FBQueue = (() => {
   });
 
   // lib/stages.ts
+  var STAGES = [
+    "New",
+    "DM Sent",
+    "Replied",
+    "Call Offered",
+    "Booked",
+    "DQ"
+  ];
   var DONE_STAGES = [
     "DM Sent",
     "Replied",
@@ -55,6 +64,7 @@ var FBQueue = (() => {
   var DEAD_STAGES = ["DQ", "Closed", "Churned"];
 
   // lib/queue.ts
+  var ALL_STAGES = STAGES;
   function resolveOpts(arg) {
     if (typeof arg === "string") return { channel: arg, snoozed: {}, now: Date.now() };
     return {

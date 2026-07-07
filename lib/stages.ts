@@ -14,15 +14,18 @@
 // unknown string.
 
 // Ordered canonical SALES stages. No "Blocked", no CSM stages.
+// 2026-07: pruned 9 → 6. Retired as picker choices (legacy-render only):
+//   "Warming"    — only ever set by IG follow events; folded into "New"
+//   "Qualifying" — one rare extension action; Replied → Call Offered directly
+//   "Closed"     — phantom: no code path ever set it ("Booked" or "DQ" cover it)
+// Existing leads on those stages still render (gray, via stageColor) and still
+// count correctly in DONE/CONTACTED/DEAD/TERMINAL below — no data migration.
 export const STAGES = [
   "New",
-  "Warming",
   "DM Sent",
   "Replied",
-  "Qualifying",
   "Call Offered",
   "Booked",
-  "Closed",
   "DQ",
 ] as const;
 
@@ -64,15 +67,15 @@ export const TERMINAL_STAGES: readonly string[] = ["Closed", "DQ", "Churned"];
 
 const STAGE_COLORS: Record<string, string> = {
   New: "#64748b",
-  Warming: "#f59e0b",
   "DM Sent": "#3b82f6",
   Replied: "#8b5cf6",
-  Qualifying: "#06b6d4",
   "Call Offered": "#10b981",
   Booked: "#22c55e",
-  Closed: "#475569",
   DQ: "#ef4444",
-  // Legacy CSM — colored so historical rows read sensibly; NOT offered as choices.
+  // Legacy — colored so historical rows read sensibly; NOT offered as choices.
+  Warming: "#f59e0b",
+  Qualifying: "#06b6d4",
+  Closed: "#475569",
   Active: "#22c55e",
   "At Risk": "#f59e0b",
   Churned: "#6b7280",

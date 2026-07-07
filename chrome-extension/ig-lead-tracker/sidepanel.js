@@ -114,7 +114,21 @@ function scoreColor(s) {
   return "#ef4444";
 }
 
-const ALL_STAGES = ["New", "Warming", "DM Sent", "Replied", "Qualifying", "Call Offered", "Booked", "Closed", "DQ"];
+// Canonical 6 — matches lib/stages.ts (9→6 prune: Warming/Qualifying/Closed
+// retired). A lead still on a retired stage renders it as a disabled grey
+// option via stageOptionsHtml; stageColor below keeps the legacy colors.
+const ALL_STAGES = ["New", "DM Sent", "Replied", "Call Offered", "Booked", "DQ"];
+
+// Options for a stage <select>: legacy/unknown current stage stays visible
+// (selected + disabled) but is never re-offerable. Mirrors instagram.js.
+function stageOptionsHtml(current) {
+  const legacy = current && !ALL_STAGES.includes(current)
+    ? `<option value="${current}" selected disabled>${current} (legacy)</option>`
+    : "";
+  return legacy + ALL_STAGES.map((s) =>
+    `<option value="${s}"${current === s ? " selected" : ""}>${s}</option>`
+  ).join("");
+}
 
 function stageColor(stage) {
   const c = {
@@ -937,7 +951,7 @@ function renderOutreach() {
       <div style="display:flex;align-items:center;gap:6px;margin-top:5px">
         <span style="font-size:10px;color:#475569;flex-shrink:0">Stage:</span>
         <select class="stage-select" id="outreachStageSelect" style="flex:1;color:${stageColor(lead.stage)};border-color:${stageColor(lead.stage)}44">
-          ${ALL_STAGES.map((s) => `<option value="${s}" ${lead.stage === s ? "selected" : ""}>${s}</option>`).join("")}
+          ${stageOptionsHtml(lead.stage)}
         </select>
       </div>
 
