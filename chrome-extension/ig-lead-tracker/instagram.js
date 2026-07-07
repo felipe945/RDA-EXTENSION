@@ -269,11 +269,26 @@
         const candidates = scope.querySelectorAll(
           "button,a,[role='option'],[role='button'],[role='listitem'],div[tabindex='0'],div[tabindex='-1']"
         );
+        const rows = [];
         for (const node of candidates) {
           if (!node.offsetParent) continue;
           if (node.getBoundingClientRect().height < 4) continue;
-          if (!(node.textContent || "").toLowerCase().includes(clean)) continue;
-          walkToClickable(node).click();
+          const text = (node.textContent || "").toLowerCase();
+          // Exact token match — "@john" or "john" as its own word, not a substring
+          // of another handle (john ⊄ johnsmith).
+          const tokens = text.split(/[\s@·]+/).filter(Boolean);
+          if (tokens.includes(clean)) {
+            walkToClickable(node).click();
+            if (onPhaseChange) onPhaseChange("done");
+            clearInterval(timer);
+            return;
+          }
+          if (text.includes(clean)) rows.push(node);
+        }
+        // Fallback for display-name-only rows ("Felipe Guimaraes"): only safe when
+        // exactly ONE row matched — two matches means ambiguity, let the rep click.
+        if (rows.length === 1) {
+          walkToClickable(rows[0]).click();
           if (onPhaseChange) onPhaseChange("done");
           clearInterval(timer);
           return;
@@ -520,6 +535,29 @@
     } catch { /* storage unavailable */ }
   }
 
+  // One-shot DM retry flag: value is "<username>|<epoch ms>", trusted for 2 min.
+  // Set when openIgDm can't find the Message button off-profile and navigates
+  // to the profile; consumed by updateCardForProfile. At most ONE automated
+  // retry — never a loop.
+  const FB_DM_RETRY_KEY = "fb_dm_retry";
+  const DM_RETRY_MAX_AGE_MS = 2 * 60 * 1000;
+
+  function getDmRetryUsername() {
+    try {
+      const [user, ts] = (localStorage.getItem(FB_DM_RETRY_KEY) || "").split("|");
+      if (!user || !ts || Date.now() - Number(ts) > DM_RETRY_MAX_AGE_MS) return "";
+      return user.toLowerCase();
+    } catch { return ""; }
+  }
+
+  function setDmRetry(username) {
+    try { localStorage.setItem(FB_DM_RETRY_KEY, `${String(username).toLowerCase()}|${Date.now()}`); } catch {}
+  }
+
+  function clearDmRetry() {
+    try { localStorage.removeItem(FB_DM_RETRY_KEY); } catch {}
+  }
+
   function openIgDm(username) {
     let tries = 0;
     function attempt() {
@@ -536,11 +574,37 @@
       if (++tries < 6) {
         setTimeout(attempt, 400);
       } else {
-        try { localStorage.setItem("fb_auto_dm_confirm", "1"); } catch {}
-        window.location.href = `https://www.instagram.com/direct/new/?username=${encodeURIComponent(username)}`;
+        // IG retired the old direct-new?username= endpoint — it now redirects
+        // to the Messages inbox. Instead: if we're not on the profile, go there once and retry
+        // the Message click after load; if we ARE on the profile and still
+        // can't find the button, tell the rep instead of stranding them.
+        const clean = String(username || "").toLowerCase();
+        const onProfile = (extractUsernameFromUrl() || "").toLowerCase() === clean;
+        const retried = getDmRetryUsername() === clean;
+        if (clean && !onProfile && !retried) {
+          setDmRetry(clean);
+          window.location.href = `https://www.instagram.com/${encodeURIComponent(clean)}/`;
+        } else {
+          clearDmRetry();
+          showDmFallbackNotice(username);
+        }
       }
     }
     attempt();
+  }
+
+  function showDmFallbackNotice(username) {
+    injectStyles();
+    document.getElementById("fb-dm-fallback-notice")?.remove();
+    const card = document.getElementById("fb-tracker-card");
+    const n = document.createElement("div");
+    n.id = "fb-dm-fallback-notice";
+    n.style.cssText = card
+      ? "margin:10px 14px;padding:9px 11px;background:#2b1d0d;border:1px solid #b45309;border-radius:8px;color:#fbbf24;font-size:11px;font-weight:600;line-height:1.5;animation:fb-in .25s ease"
+      : "position:fixed;top:16px;right:16px;z-index:2147483647;max-width:280px;padding:10px 12px;background:#0F1420;border:1px solid #b45309;border-radius:10px;color:#fbbf24;font-size:12px;font-weight:600;line-height:1.5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.5);animation:fb-in .25s ease";
+    n.innerHTML = `Couldn't auto-open the DM — tap <strong style="color:#E2E8F0">Message</strong> on ${username ? `@${String(username).replace(/^@/, "")}` : "this profile"}. Your opener is on the clipboard.`;
+    (card || document.body).appendChild(n);
+    setTimeout(() => n.remove(), 12000);
   }
 
   function queueRetry(payload, igSecret) {
@@ -590,6 +654,7 @@
       username,
       userId: "",
       pageUrl: window.location.href,
+      profileUrl: `https://www.instagram.com/${String(username).replace(/^@/, "")}/`,
       bio,
       followerCount,
       displayName,
@@ -624,10 +689,13 @@
 
   // ── Card lifecycle ──────────────────────────────────────────────────────────
 
+  let activeSwitchCleanup = null; // set by renderSwitchPrompt, called on card teardown
+
   function removeCard() {
     document.getElementById("fb-tracker-card")?.remove();
     clearInterval(pollTimer);
     pollTimer = null;
+    if (activeSwitchCleanup) activeSwitchCleanup(); // don't leak the storage watcher across navigations
   }
 
   function injectStyles() {
@@ -892,9 +960,11 @@
       function cleanup() {
         if (storageCleanedUp) return;
         storageCleanedUp = true;
+        activeSwitchCleanup = null;
         cancelWatch();
         chrome.storage.onChanged.removeListener(storageWatcher);
       }
+      activeSwitchCleanup = cleanup; // card teardown (removeCard) must tear this watcher down too
 
       function storageWatcher(changes) {
         if (!changes.activeIgAccount) return;
@@ -1968,7 +2038,9 @@
           const queue = window.FBQueue.buildQueue(resp?.leads || [], { channel: "ig", snoozed: fb_snoozed });
           const nextLead = queue.find((l) => l.id !== lead?.id);
           if (nextLead) {
-            const nextUrl = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
+            const nextUrl = nextLead.ig_username
+              ? `https://www.instagram.com/${nextLead.ig_username}/`
+              : nextLead.ig_profile_url;
             const nextBtn = document.createElement("button");
             nextBtn.textContent = `Next → @${nextLead.ig_username || nextLead.name}`;
             nextBtn.style.cssText = "width:100%;background:#151B2E;border:1px solid #3b82f6;border-radius:7px;color:#93c5fd;font-size:11px;font-weight:600;padding:7px;cursor:pointer";
@@ -2118,6 +2190,9 @@
       const pos = queue.findIndex((l) => l.id === currentLeadId);
       const nextLead = queue.find((l) => l.id !== currentLeadId);
       if (!nextLead) return;
+      const nextUrl = nextLead.ig_username
+        ? `https://www.instagram.com/${nextLead.ig_username}/`
+        : nextLead.ig_profile_url;
 
       const navWrap = document.createElement("div");
       navWrap.style.cssText = "margin-top:8px;border-top:1px solid #1A2235;padding-top:8px";
@@ -2143,7 +2218,7 @@
           // C4: server-side snooze (background does the authed POST)
           const until = new Date(Date.now() + days * 24 * 3600000).toISOString();
           await chrome.runtime.sendMessage({ type: "SNOOZE_LEAD", id: currentLeadId, until }).catch(() => {});
-          window.location.href = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
+          window.location.href = nextUrl;
         });
         controlRow.appendChild(sb);
       }
@@ -2157,13 +2232,13 @@
       skipBtn.style.cssText = "flex:1;background:#0F1420;border:1px solid #1A2235;border-radius:6px;color:#5A6274;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
       skipBtn.addEventListener("click", () => {
         dismissedFor = username;
-        window.location.href = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
+        window.location.href = nextUrl;
       });
       const nextBtn = document.createElement("button");
       nextBtn.textContent = `Next → @${nextLead.ig_username || nextLead.name}`;
       nextBtn.style.cssText = "flex:2;background:#151B2E;border:1px solid #3b82f6;border-radius:6px;color:#93c5fd;font-size:11px;font-weight:600;padding:5px;cursor:pointer";
       nextBtn.addEventListener("click", () => {
-        window.location.href = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
+        window.location.href = nextUrl;
       });
       btnRow.appendChild(skipBtn);
       btnRow.appendChild(nextBtn);
@@ -2347,7 +2422,9 @@
           const queue = window.FBQueue.buildQueue(resp?.leads || [], { channel: "ig", snoozed: fb_snoozed });
           const nextLead = queue.find((l) => l.id !== currentLeadId);
           if (nextLead) {
-            const nextUrl = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
+            const nextUrl = nextLead.ig_username
+              ? `https://www.instagram.com/${nextLead.ig_username}/`
+              : nextLead.ig_profile_url;
             const nextBtn = document.createElement("button");
             nextBtn.textContent = `Next → @${nextLead.ig_username || nextLead.name}`;
             nextBtn.style.cssText = "width:100%;margin-top:6px;background:#151B2E;border:1px solid #3b82f6;border-radius:7px;color:#93c5fd;font-size:11px;font-weight:600;padding:7px;cursor:pointer";
@@ -2708,7 +2785,9 @@
           const queue = window.FBQueue.buildQueue(resp?.leads || [], { channel: "ig", snoozed: fb_snoozed });
           const nextLead = queue.find((l) => l.id !== currentLeadId);
           if (nextLead) {
-            const nextUrl = nextLead.ig_profile_url || `https://www.instagram.com/${nextLead.ig_username}/`;
+            const nextUrl = nextLead.ig_username
+              ? `https://www.instagram.com/${nextLead.ig_username}/`
+              : nextLead.ig_profile_url;
             const nextBtn = document.createElement("button");
             nextBtn.textContent = `Next → @${nextLead.ig_username || nextLead.name}`;
             nextBtn.style.cssText = "width:100%;margin-top:6px;background:#151B2E;border:1px solid #3b82f6;border-radius:7px;color:#93c5fd;font-size:11px;font-weight:600;padding:7px;cursor:pointer";
@@ -2767,16 +2846,25 @@
     if (pending && Date.now() - pending.ts < 600000) { // 10-min expiry
       const currentUser = extractUsernameFromUrl();
       if (currentUser !== pending.profile) {
-        // Not on the right profile yet — navigate there but KEEP pending in localStorage
-        // so it's available when we arrive. Do NOT clearPendingDm here.
-        window.location.href = `https://www.instagram.com/${pending.profile}/`;
-        return;
+        if (pending.redirected) {
+          // Already bounced once and the rep navigated elsewhere anyway —
+          // they chose a different page; stop fighting them.
+          clearPendingDm();
+        } else {
+          // Not on the right profile yet — navigate there ONCE, keeping pending
+          // (and its backup) so it's available when we arrive.
+          pending.redirected = true;
+          _writePending(pending);
+          window.location.href = `https://www.instagram.com/${pending.profile}/`;
+          return;
+        }
+      } else {
+        // We're on the right profile — consume the pending and proceed
+        autoDm = pending.channel;
+        autoDmSecondTouch = pending.secondTouch || null;
+        autoDmCrossChannelIntro = pending.crossChannelIntro || null;
+        clearPendingDm();
       }
-      // We're on the right profile — consume the pending and proceed
-      autoDm = pending.channel;
-      autoDmSecondTouch = pending.secondTouch || null;
-      autoDmCrossChannelIntro = pending.crossChannelIntro || null;
-      clearPendingDm();
     }
     // ────────────────────────────────────────────────────────────────────────
 
@@ -2785,6 +2873,13 @@
     if (!username) {
       removeCard();
       return;
+    }
+
+    // One-shot DM retry: openIgDm navigated us here because the Message button
+    // wasn't found off-profile. Consume the flag and retry the click ONCE.
+    if (getDmRetryUsername() === username.toLowerCase()) {
+      clearDmRetry();
+      openIgDm(username);
     }
 
     if (dismissedFor === username) return;
@@ -2835,9 +2930,10 @@
   // Fast path: Navigation API (Chrome 102+) — fires near-instantly on SPA navigation
   if (window.navigation) {
     window.navigation.addEventListener("navigate", () => setTimeout(handleUrlChange, 50));
+  } else {
+    // Fallback poll only for browsers without the Navigation API
+    setInterval(handleUrlChange, 800);
   }
-  // Fallback: poll for browsers without Navigation API
-  setInterval(handleUrlChange, 800);
 
   observeProfileHeader();
   updateCardForProfile().catch(e => console.error("[FanBasis] card error:", e));
@@ -2851,6 +2947,10 @@
 
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "CLICK_DM_BTN") openIgDm(msg.username || extractUsernameFromUrl());
+    if (msg?.type === "FB_RECHECK_ACCOUNT") {
+      // Sidepanel's account pill went stale — kick a fresh viewer detection.
+      document.dispatchEvent(new CustomEvent("ig_viewer_check", { bubbles: true, composed: true }));
+    }
     if (msg.type === "TRIGGER_SAVE") {
       getSettings().then(({ dashboardUrl, igSecret }) => {
         const username = extractUsernameFromUrl();

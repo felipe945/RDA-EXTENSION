@@ -332,6 +332,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .account-pill.correct .account-dot { background: var(--green); }
 .account-pill.wrong { border-color: rgba(var(--pink-rgb),.27); background: rgba(var(--pink-rgb),.07); color: var(--pink); }
 .account-pill.wrong .account-dot { background: var(--pink); }
+.account-pill.unknown { border-color: #f59e0b44; background: #f59e0b11; color: #f59e0b; }
+.account-pill.unknown .account-dot { background: #f59e0b; }
 
 /* ── Quick save bar ──────────────────────────────────────────────────────────── */
 #quick-save-bar { display: flex; align-items: center; justify-content: space-between; padding: 5px 14px; background: var(--bg3); border-bottom: 1px solid var(--border); flex-shrink: 0; font-size: 11px; }

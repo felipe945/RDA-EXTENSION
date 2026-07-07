@@ -146,7 +146,9 @@ function igProfileUrl(handle) {
 }
 
 function igUrl(lead) {
-  return lead.ig_profile_url || igProfileUrl(lead.ig_username);
+  // Username-first: ig_profile_url is captured/imported data — only trust it
+  // when there's no handle to build from.
+  return igProfileUrl(lead.ig_username) || lead.ig_profile_url || null;
 }
 
 function displayName(lead) {
@@ -160,17 +162,19 @@ function esc(str) {
 // Navigate the existing Instagram tab instead of opening a new one
 function openInIgTab(url) {
   if (!url) return;
-  if (url.includes("instagram.com")) {
-    chrome.tabs.query({ url: "*://www.instagram.com/*" }, (tabs) => {
-      if (tabs.length > 0) {
-        chrome.tabs.update(tabs[0].id, { url, active: true });
-      } else {
-        chrome.tabs.create({ url });
-      }
+  if (!url.includes("instagram.com")) { chrome.tabs.create({ url }); return; }
+  // Prefer the tab the rep is looking at; then any IG tab in THIS window;
+  // never commandeer an IG tab in another window (looks like nothing happened).
+  chrome.tabs.query({ active: true, currentWindow: true }, ([activeTab]) => {
+    if (activeTab?.url?.includes("instagram.com")) {
+      chrome.tabs.update(activeTab.id, { url });
+      return;
+    }
+    chrome.tabs.query({ url: "*://www.instagram.com/*", currentWindow: true }, (tabs) => {
+      if (tabs.length > 0) chrome.tabs.update(tabs[0].id, { url, active: true });
+      else chrome.tabs.create({ url });
     });
-  } else {
-    chrome.tabs.create({ url });
-  }
+  });
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -237,6 +241,7 @@ function renderFollowups() {
 
 let outreachChannel = "ig"; // "ig" | "linkedin"
 let outreachIdx = 0;
+let panelNavUntil = 0;    // panel-driven IG navs win over tab re-sync for a grace window
 let snoozedLeads = {};    // { leadId: snoozeUntilMs }
 let fbChannelDone = {};   // { leadId: { fb: boolean, pers: boolean } }
 let researchPollTimer = null;
@@ -293,23 +298,45 @@ function startResearchPoll(leadId) {
   }, 5000);
 }
 
+const ACCOUNT_MAX_AGE_MS = 5 * 60 * 1000; // same freshness contract as instagram.js
+
 async function updateAccountPill() {
-  const { activeIgAccount = "" } = await chrome.storage.local.get({ activeIgAccount: "" });
+  const { activeIgAccount = "", activeIgAccountTs = 0 } =
+    await chrome.storage.local.get({ activeIgAccount: "", activeIgAccountTs: 0 });
   const pill = document.getElementById("account-pill");
   const label = document.getElementById("account-label");
   if (!pill || !label) return;
   if (!activeIgAccount) { pill.style.display = "none"; return; }
   pill.style.display = "flex";
+
+  const stale = !activeIgAccountTs || Date.now() - activeIgAccountTs > ACCOUNT_MAX_AGE_MS;
+  if (stale) {
+    // Don't vouch for a detection older than the freshness contract — show
+    // checking state and ask the content script to re-detect.
+    label.textContent = `@${activeIgAccount} · checking…`;
+    pill.className = "account-pill unknown";
+    pill.title = "Re-checking which Instagram account is active";
+    chrome.tabs.query({ url: "*://www.instagram.com/*", currentWindow: true }, (tabs) => {
+      if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { type: "FB_RECHECK_ACCOUNT" }).catch(() => {});
+    });
+    return;
+  }
+
   label.textContent = `@${activeIgAccount}`;
   const cleanFb = fanbasisHandle.replace(/^@/, "").toLowerCase();
   const cleanPers = personalIgUsername.replace(/^@/, "").toLowerCase();
   const activeAcct = activeIgAccount.toLowerCase();
   if ((cleanFb && activeAcct === cleanFb) || (cleanPers && activeAcct === cleanPers)) {
     pill.className = "account-pill correct";
-  } else if (cleanFb || cleanPers) {
+    pill.title = "";
+  } else if (cleanFb && cleanPers) {
     pill.className = "account-pill wrong";
+    pill.title = "Not one of your configured accounts";
   } else {
-    pill.className = "account-pill";
+    // Only one (or neither) identity configured — an unrecognized account is
+    // "unknown", not "wrong": don't cry wolf at reps without a personal IG set.
+    pill.className = "account-pill unknown";
+    pill.title = "Set your personal Instagram in dashboard Settings → Extension to track both accounts";
   }
 }
 
@@ -355,6 +382,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       const skip = new Set(["p","reel","reels","explore","direct","stories","accounts","tv","ar","login"]);
       const username = match && !skip.has(match[1]) ? match[1].toLowerCase() : null;
       if (!username) return;
+      if (Date.now() < panelNavUntil) return; // panel drove this navigation — don't re-sync against it
 
       // Refresh data first (allLeads may be stale), then sync card
       loadData().then(() => {
@@ -778,6 +806,11 @@ function showSidepanelSlotPicker(_container, lead, slots, slotMins, aes, aeId, i
 function renderOutreach() {
   // Don't clobber the notes textarea mid-typing — blur triggers a save + re-render
   if (document.activeElement && document.activeElement.id === "leadNotes") return;
+  // Don't re-render while the booking overlay is open — a background refresh
+  // mid-booking wipes the rep's slot selection. (Overlay is display:none when
+  // closed, display:flex when open — inline style only.)
+  const bookOverlay = document.getElementById("sp-book-overlay");
+  if (bookOverlay && bookOverlay.style.display === "flex") return;
   stopResearchPoll();
   const queue = buildOutreachQueue(outreachChannel);
   outreachIdx = Math.min(outreachIdx, Math.max(0, queue.length - 1));
@@ -1206,14 +1239,14 @@ function renderOutreach() {
     outreachIdx = Math.max(0, outreachIdx - 1);
     const prev = queue[outreachIdx];
     const url = prev && igUrl(prev);
-    if (url && outreachChannel === "ig") openInIgTab(url);
+    if (url && outreachChannel === "ig") { panelNavUntil = Date.now() + 2500; openInIgTab(url); }
     renderOutreach();
   });
   document.getElementById("nextBtn")?.addEventListener("click", () => {
     outreachIdx = Math.min(queue.length - 1, outreachIdx + 1);
     const next = queue[outreachIdx];
     const url = next && igUrl(next);
-    if (url && outreachChannel === "ig") openInIgTab(url);
+    if (url && outreachChannel === "ig") { panelNavUntil = Date.now() + 2500; openInIgTab(url); }
     renderOutreach();
   });
 
@@ -1447,7 +1480,7 @@ document.getElementById("signInBtn").addEventListener("click", async () => {
 
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.fb_cache) loadData();
-  if (changes.activeIgAccount) updateAccountPill();
+  if (changes.activeIgAccount || changes.activeIgAccountTs) updateAccountPill();
   // Sign-in/out or a fresh bootstrap from background → refresh gate + status
   if (changes.fb_rep_token || changes.fb_bootstrap) loadData();
 });
@@ -1461,6 +1494,7 @@ document.addEventListener("visibilitychange", () => {
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "FB_PROFILE_ACTIVE" && msg.username) {
+    if (Date.now() < panelNavUntil) return; // panel drove this navigation — don't re-sync against it
     // Mini card loaded a profile — sync outreach card to that lead.
     // Use allLeads (not buildOutreachQueue) so done-stage leads (just DM'd, Replied, etc.)
     // still sync — they leave the outreach queue but the user may still be on their profile.
