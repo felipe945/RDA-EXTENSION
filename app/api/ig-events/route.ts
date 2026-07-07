@@ -57,6 +57,12 @@ export async function POST(req: NextRequest) {
     const now = new Date().toISOString();
     const saveEvent = { type, postUrl: profileUrl ?? pageUrl ?? null, ts: now, rep_id: repId };
 
+    // Canonical profile URL from the handle — never trust the client's page URL.
+    // Falls back to the client value only for a (theoretical) username-less save.
+    const canonicalIgUrl = username
+      ? `https://www.instagram.com/${String(username).replace(/^@/, "")}/`
+      : (profileUrl ?? null);
+
     // Find or create lead by IG username (fetch ig_events for append)
     const { data: existing } = await db
       .from("leads")
@@ -80,7 +86,9 @@ export async function POST(req: NextRequest) {
         .update({
           bio: bio ?? null,
           follower_count: followerCount ?? null,
-          ig_profile_url: profileUrl ?? null,
+          // undefined = leave the existing value alone rather than nulling it
+          // (the extension's saveLead sends no profileUrl on re-saves).
+          ig_profile_url: canonicalIgUrl ?? undefined,
           name: displayName ?? username,
           score,
           research_status: "pending",
@@ -103,7 +111,7 @@ export async function POST(req: NextRequest) {
           stage: "New",
           bio: bio ?? null,
           follower_count: followerCount ?? null,
-          ig_profile_url: profileUrl ?? null,
+          ig_profile_url: canonicalIgUrl,
           ig_user_id: userId ?? null,
           source_account: (body.savedFromAccount as string | undefined) ?? null,
           score,

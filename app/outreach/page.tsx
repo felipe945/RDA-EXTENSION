@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useLeads } from "@/hooks/useLeads";
 import { useMode } from "@/components/ModeProvider";
 import type { Lead } from "@/hooks/useLeads";
-import { IgHandle, igDmUrl, igProfileUrl, type LeadPlus } from "@/components/ig";
+import { IgHandle, igOpenUrl, type LeadPlus } from "@/components/ig";
 import { SnoozeControl } from "@/components/SnoozeControl";
 import { TouchChips } from "@/components/TouchChips";
 import BookCallModal from "@/components/BookCallModal";
@@ -79,16 +79,15 @@ export default function OutreachPage() {
     });
   }, [opener]);
 
-  // THE primary action. For IG it opens the DM thread itself — the opener is
-  // on the clipboard, the compose box is one paste away. (The old primary
-  // opened the profile and a separate "Open DM ↗" did this; merged.)
+  // THE primary action: copy the opener, open the prospect's PROFILE.
+  // (A /direct/t/<username> "open the thread" URL doesn't exist — /direct/t/
+  // takes a numeric thread id, so it lands on the Messages inbox. Profile +
+  // opener-on-clipboard is the accurate flow; the rep taps Message there.)
   function primaryAction() {
     if (!lead) return;
     copyOpener();
     if (channel === "ig") {
-      const url = lead.ig_username
-        ? igDmUrl(lead.ig_username)
-        : lead.ig_profile_url ?? (lead.ig_username ? igProfileUrl(lead.ig_username) : null);
+      const url = igOpenUrl(lead);
       if (url) window.open(url, "_blank");
     } else if (channel === "linkedin" && lead.linkedin_url) {
       window.open(lead.linkedin_url, "_blank");
@@ -434,7 +433,7 @@ export default function OutreachPage() {
               className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[#FF3A69] hover:bg-[#e03060] text-white font-semibold rounded-lg transition-colors text-sm shadow-[0_4px_16px_rgba(255,58,105,0.3)]"
             >
               {copied ? "✓ Copied!" : channel === "ig" ? (
-                <><span>Copy opener</span><span className="opacity-70">+ Open DM</span></>
+                <><span>Copy opener</span><span className="opacity-70">+ Open profile</span></>
               ) : (
                 <><span>Copy</span><span className="opacity-70">+ Open {CHANNEL_LABELS[channel]}</span></>
               )}

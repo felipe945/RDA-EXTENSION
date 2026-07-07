@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useLead } from "@/hooks/useLeads";
 import LeadDetailPanel from "@/components/LeadDetailPanel";
-import { IgHandle } from "@/components/ig";
+import { IgHandle, igOpenUrl } from "@/components/ig";
 
 export default function LeadPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -60,9 +60,9 @@ export default function LeadPage({ params }: { params: Promise<{ id: string }> }
           </span>
         )}
         <div className="flex items-center gap-2 ml-auto shrink-0">
-          {lead.ig_profile_url && (
+          {igOpenUrl(lead) && (
             <a
-              href={lead.ig_profile_url}
+              href={igOpenUrl(lead)!}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs text-pink-500 hover:underline"

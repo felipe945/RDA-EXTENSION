@@ -17,8 +17,11 @@ export function igProfileUrl(handle: string): string {
   return `https://www.instagram.com/${handle.replace(/^@/, "")}/`;
 }
 
-export function igDmUrl(handle: string): string {
-  return `https://www.instagram.com/direct/t/${handle.replace(/^@/, "")}`;
+// Username-first: the stored ig_profile_url is extension/Apify-captured and
+// unvalidated — only trust it when we have no handle to build from.
+export function igOpenUrl(lead: { ig_username?: string | null; ig_profile_url?: string | null }): string | null {
+  if (lead.ig_username) return igProfileUrl(lead.ig_username);
+  return lead.ig_profile_url ?? null;
 }
 
 export function isSnoozed(lead: LeadPlus): boolean {
