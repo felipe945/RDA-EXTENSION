@@ -34,13 +34,23 @@ fi
 cp -R "$SRC" "$STAGE/fanbasis-extension"
 find "$STAGE" -name ".DS_Store" -delete
 
-python3 - "$STAGE/fanbasis-extension/manifest.json" <<'PY'
-import json, sys
+# The PUBLISHED item's public key (extension id cmpjjdmdaegnnmfmcjjekfninghkoikd),
+# extracted from the store-served CRX header 2026-07-07. CWS requires every
+# update package's key to MATCH the item — the repo's dev key (a different
+# keypair, id ckiknpaiindhapocfloenompedkgneoa) gets rejected with "key field
+# value in the manifest doesn't match the current item", and so did keyless
+# uploads for this item. This key is public (it ships in every user's
+# installed manifest) — safe to keep here.
+STORE_KEY="MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAv0spAuRCVN2an1KqxDHiKaVXZnA+qc6ZdPOECyu8Z3J9m7uRP3m9MyOEHx9Us6JFuuTSrxJ17FvSAphhyHhzRdPx+KD0MEBynYAlSiIhgZTFSnIGayoEGFs3EJyKi3C6aLVdSrGhT88R81fM3rUTwd7Fxqzw0JI+ahuvOobMVWiA1IEc/WQB5p86veWVJCZAIyl+2vJSqNAW++IASbIXph8TR3bb3MqXrg2taxj/K7HCbgtbG4d1YZky8uD7O2g6ZUvTq4n84tnFh8YcQos7qTLiAZNtUrN8WkjnGMBqnCDPCS2YQb7otdPqR6kpjEf4KQq+oTdi830lrciOpnFHFQIDAQAB"
+
+STORE_KEY="$STORE_KEY" python3 - "$STAGE/fanbasis-extension/manifest.json" <<'PY'
+import json, sys, os
 
 path = sys.argv[1]
 m = json.load(open(path))
 
-m.pop("key", None)
+# Replace the dev key with the published item's key (see STORE_KEY note above).
+m["key"] = os.environ["STORE_KEY"]
 m["description"] = "FanBasis sales cockpit: capture Instagram leads, work the outreach queue, and book AE calls without leaving IG."
 
 # Drop only the localhost dev host — the source manifest is already store-shaped.
