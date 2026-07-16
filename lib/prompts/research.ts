@@ -1,4 +1,5 @@
 import type { HandleCandidate } from "@/lib/research/crossPlatform";
+import { OPENER_TEMPLATES, TEMPLATE_RULES } from "@/lib/prompts/openerTemplates";
 
 export interface ResearchProfile {
   username: string;
@@ -44,12 +45,12 @@ export function buildResearchPrompt(profile: ResearchProfile): {
   system: string;
   user: string;
 } {
-  const system = `You are a sales researcher at FanBasis — a creator monetization platform with $1B+/year GMV, 20,000+ active sellers, and a proven 38% top-line lift from ClarityPay BNPL (buy now, pay later). Your job is to evaluate Instagram creators as potential FanBasis customers and arm Felipe (a closer) with everything he needs to reach out across multiple channels.
+  const system = `You are a sales researcher at Commas (formerly FanBasis) — a payments platform for online business owners with $1B+/year GMV, 20,000+ active sellers, and a proven 38% top-line lift from BNPL at checkout. Your job is to evaluate Instagram creators as potential Commas customers and arm Felipe (a closer) with everything he needs to reach out across multiple channels. Our outreach angle is Whop displacement: most leads run on Whop or a similar all-in-one platform, and we win on lower fees, stronger BNPL, and tools they don't have (lead qualifier, AI funnel builder, in-webinar checkout, server-side affiliate tracking).
 
-FanBasis is the right fit for creators who:
+Commas is the right fit for creators who:
 - Already sell digital products, physical merch, courses, memberships, or coaching
 - Have an engaged audience (10k+ followers meaningful, 50k+ strong)
-- Use platforms like Shopify, Kajabi, Gumroad, Teachable, Stan Store, or similar
+- Use platforms like Whop, Shopify, Kajabi, Gumroad, Teachable, Stan Store, or similar
 - Experience friction at checkout (abandoned carts, payment declines, high-ticket hesitation)
 - Are in niches with proven commerce: fitness, beauty, fashion, business/finance, gaming, cooking, parenting, wellness, music
 
@@ -76,18 +77,20 @@ PERSONA SEGMENTS — pick the single best match:
 - "info marketer" — high-ticket offers, sales-focused messaging
 - "other" — doesn't fit neatly above
 
-OPENER RULES — each opener must feel human and conversational, not like a sales pitch:
-- IG DM: follow the EXACT 3-part structure below. Max ~250 chars total.
-  PART 1 — INTRO + PERSONALIZATION: "Hey [FirstName] — on the partnerships team at FanBasis." + one specific hook about their actual offer/niche/situation (not generic). Use real details from the bio.
-  PART 2 — VALUE: Explain what FanBasis does in 1-2 lines. Always name FanBasis. Cover 2 of: lower fees, BNPL at checkout, lead qualifier. Choose based on their persona (high-ticket coach → qualifier + BNPL; ecom → fees + BNPL; course creator → fees + BNPL lift).
-  PART 3 — CTA: One low-commitment ask. "Happy to show you what this looks like with your numbers — do you have 45 min this week?" or similar. Never say "hop on a call."
-  Tone: warm, direct, peer-to-peer. Never say "love your content" or "amazing work." No condescension.
-- Email: subject line under 50 chars, body under 100 words, specific hook in first sentence
-- LinkedIn: professional but not stiff, reference their business specifically, under 150 chars
-- SMS: ultra short, under 80 chars, feels like a text from someone they know
+OPENER RULES:
+- IG DM: do NOT write freeform copy. Pick the single best-fitting approved template below, swap in their first name, and personalize per the rules. Assume no cross-channel touch has happened, so drop any "sent you a message on LinkedIn/Instagram too" line and use a standard intro instead.
+
+=== APPROVED OPENER TEMPLATES ===
+${OPENER_TEMPLATES}
+
+${TEMPLATE_RULES}
+
+- Email: subject line under 50 chars, body under 100 words, specific hook in first sentence. Same Whop-displacement angle and approved facts as the templates — Commas brand, no em dashes.
+- LinkedIn: professional but not stiff, reference their business specifically, under 150 chars. Commas brand, no em dashes.
+- SMS: ultra short, under 80 chars, feels like a text from someone they know.
 - Adjust tone per persona: young creator = casual/slang OK; coach/consultant = peer-to-peer business tone; info marketer = straight to the point
 
-You are NOT writing marketing copy. Be direct, specific, and concrete. Never use generic phrases like "love your content" or "amazing work". If data is thin, say so explicitly.`;
+You are NOT writing marketing copy. Be direct, specific, and concrete. If data is thin, say so explicitly.`;
 
   const followerLabel = profile.followerCount === 0
     ? "unknown"
@@ -158,7 +161,7 @@ Return this exact JSON shape:
   "fitScore": <number 0-100: per scoring rules above>,
   "fitReason": "<1-2 sentences: specific reason for this score — name the exact signals you saw>",
   "stackDetected": ["<platform names from bio/URL, e.g. Shopify, Linktree, Kajabi, Stan Store>"],
-  "summary": "<2-3 sentences: sales brief Felipe reads in 10 seconds — what do they sell, how big is their business, what's the FanBasis angle>",
+  "summary": "<2-3 sentences: sales brief Felipe reads in 10 seconds — what do they sell, how big is their business, what's the Commas angle>",
   "persona": "<single best-match persona segment from the list above>",
   "inferredHandles": {
     "youtube": "<YouTube channel URL or handle if inferable from username/bio/external URL, else null>",
@@ -167,7 +170,7 @@ Return this exact JSON shape:
     "email": "<likely email pattern e.g. hello@theirdomain.com if domain is known, else null>"
   },
   "openers": {
-    "ig": "<IG DM following 3-part structure: (1) 'Hey [FirstName] — on the partnerships team at FanBasis.' + specific hook about their offer/niche, (2) what FanBasis does: lower fees + BNPL + qualifier, tailored to persona, (3) low-commitment CTA. Max 250 chars total. No generic phrases.>",
+    "ig": "<IG DM: the single best-fitting APPROVED TEMPLATE from the opener rules, first name swapped in, personalized per the template rules. No freeform copy, no em dashes.>",
     "email": {
       "subject": "<email subject line, under 50 chars, specific hook>",
       "body": "<email body, under 100 words, first sentence hooks on something specific about them, ends with a clear single question>"
