@@ -221,7 +221,7 @@ Standalone Node worker (NOT part of the Next build — new top-level dir, own `p
    { "display_information": { "name": "Pulse (Felipe personal, read-only)" },
      "oauth_config": { "scopes": { "user": [
        "channels:history","channels:read","groups:history","groups:read",
-       "im:history","im:read","mpim:history","mpim:read","users:read"
+       "im:history","im:read","mpim:history","mpim:read","users:read","users:read.email"
      ] } },
      "settings": { "org_deploy_enabled": false, "socket_mode_enabled": false } }
    ```

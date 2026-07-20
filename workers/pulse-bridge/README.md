@@ -24,7 +24,7 @@ Getting the Slack token: api.slack.com/apps → Create New App → From manifest
 { "display_information": { "name": "Pulse (Felipe personal, read-only)" },
   "oauth_config": { "scopes": { "user": [
     "channels:history","channels:read","groups:history","groups:read",
-    "im:history","im:read","mpim:history","mpim:read","users:read"
+    "im:history","im:read","mpim:history","mpim:read","users:read","users:read.email"
   ] } },
   "settings": { "org_deploy_enabled": false, "socket_mode_enabled": false } }
 ```
