@@ -21,6 +21,8 @@ export type PulseConvo = {
   handled_at: string | null;
   ai_needs_reply: boolean | null;
   ai_waiting_on: "you" | "them" | "none" | null;
+  ai_urgency: "low" | "medium" | "high" | null;
+  unanswered_count: number;
   ai_open_commitment: string | null;
   ai_summary: string | null;
   ai_suggested_reply: string | null;
@@ -28,6 +30,7 @@ export type PulseConvo = {
   reason: string;
   hoursSinceInbound: number | null;
   seen: boolean;
+  urgent: boolean;
   link: string | null;
 };
 
@@ -62,8 +65,10 @@ function ageLabel(hours: number | null): string {
 
 function reasonLabel(c: PulseConvo): string {
   switch (c.reason) {
-    case "owe_reply":
-      return `owes reply · ${ageLabel(c.hoursSinceInbound)}`;
+    case "owe_reply": {
+      const msgs = c.unanswered_count >= 2 ? ` · ${c.unanswered_count} msgs waiting` : "";
+      return `owes reply · ${ageLabel(c.hoursSinceInbound)}${msgs}`;
+    }
     case "commitment":
       return c.ai_open_commitment ? `you promised: ${c.ai_open_commitment}` : "you promised something";
     case "nudge":
@@ -139,6 +144,19 @@ export function PulseCard({
         >
           {reasonLabel(c)}
         </span>
+        {c.urgent && c.status !== "green" && (
+          <span
+            className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-wide"
+            style={{ background: "#EF4444", color: "#fff" }}
+            title={
+              c.ai_urgency === "high"
+                ? "The AI flagged a real problem (issue/money/frustration/name-pings)"
+                : `${c.unanswered_count} messages piled up since your last reply`
+            }
+          >
+            🔥 urgent
+          </span>
+        )}
         {c.seen && c.reason === "owe_reply" && (
           <span
             className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-bold"

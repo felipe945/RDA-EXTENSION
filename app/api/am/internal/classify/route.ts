@@ -88,6 +88,7 @@ export async function POST(req: NextRequest) {
     .update({
       ai_needs_reply: result.needs_reply,
       ai_waiting_on: result.waiting_on,
+      ai_urgency: result.urgency,
       ai_open_commitment: result.open_commitment,
       ai_summary: result.summary,
       ai_suggested_reply: result.suggested_reply,

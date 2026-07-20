@@ -20,6 +20,8 @@ const base: AmConversationRow = {
   handled_at: null,
   ai_needs_reply: null,
   ai_waiting_on: null,
+  ai_urgency: null,
+  unanswered_count: 0,
   meta: {},
 };
 
@@ -121,6 +123,44 @@ expect("unclassified 30h inbound → red (uncertain flags)", {
 expect("inbound 1h → green/fresh_inbound", {
   last_direction: "in", last_msg_at: hoursAgo(1), last_inbound_at: hoursAgo(1),
 }, { status: "green", reason: "fresh_inbound" });
+
+// --- "Fires actually need to be fires" (2026-07-20) ---
+
+// 13. Real problem (AI urgency=high), only 2h old → already RED
+expect("urgent issue 2h → red (1h urgent threshold)", {
+  last_direction: "in", last_msg_at: hoursAgo(2), last_inbound_at: hoursAgo(2),
+  ai_urgency: "high", ai_needs_reply: true, unanswered_count: 1,
+}, { status: "red", reason: "owe_reply" });
+
+// 14. Low-stakes chatter, 30h old → CAPPED at amber, never a fire
+expect("low urgency 30h → amber cap (chatter can't be a fire)", {
+  last_direction: "in", last_msg_at: hoursAgo(30), last_inbound_at: hoursAgo(30),
+  ai_urgency: "low", ai_needs_reply: true,
+}, { status: "amber", reason: "owe_reply" });
+
+// 15. Pile-on: 4 unanswered messages, only 2h old → RED even without AI
+expect("4 msgs piled up 2h → red (pile-on)", {
+  last_direction: "in", last_msg_at: hoursAgo(2), last_inbound_at: hoursAgo(2),
+  unanswered_count: 4,
+}, { status: "red", reason: "owe_reply" });
+
+// 16. Pile-on OVERRIDES a low-urgency verdict (they kept pinging)
+expect("low urgency but 5 msgs piled → red", {
+  last_direction: "in", last_msg_at: hoursAgo(3), last_inbound_at: hoursAgo(3),
+  ai_urgency: "low", unanswered_count: 5,
+}, { status: "red", reason: "owe_reply" });
+
+// 17. Urgent but brand-new (20 min) → amber immediately (surfaces fast, red at 1h)
+expect("urgent 0.3h → amber (not yet red, but surfaced)", {
+  last_direction: "in", last_msg_at: hoursAgo(0.3), last_inbound_at: hoursAgo(0.3),
+  ai_urgency: "high", unanswered_count: 1,
+}, { status: "amber", reason: "owe_reply" });
+
+// 18. Medium urgency ordinary question keeps the normal 24h clock
+expect("medium urgency 14h unseen → amber (normal clock)", {
+  last_direction: "in", last_msg_at: hoursAgo(14), last_inbound_at: hoursAgo(14),
+  ai_urgency: "medium", unanswered_count: 1,
+}, { status: "amber", reason: "owe_reply" });
 
 if (failures > 0) {
   console.error(`\n${failures} golden check(s) FAILED`);

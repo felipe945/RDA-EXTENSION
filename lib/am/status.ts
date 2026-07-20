@@ -19,6 +19,8 @@ export type PulseReason =
 const OWE_AMBER_HOURS = 4;
 const OWE_RED_HOURS = 24;
 const OWE_RED_HOURS_SEEN = 12; // he already OPENED it — escalate faster
+const OWE_RED_HOURS_URGENT = 1; // real fire (problem/money/pile-on) — escalate FAST
+const PILE_ON_COUNT = 3; // client sent 3+ messages since Felipe's last reply
 const NUDGE_DAYS = 3;
 const QUIET_START_ET = 23; // red is clamped to amber 11pm–7am ET (fires at 7am)
 const QUIET_END_ET = 7;
@@ -35,6 +37,8 @@ export interface AmConversationRow {
   handled_at: string | null;
   ai_needs_reply: boolean | null;
   ai_waiting_on: "you" | "them" | "none" | null;
+  ai_urgency: "low" | "medium" | "high" | null;
+  unanswered_count: number;
   meta: Record<string, unknown> | null;
 }
 
@@ -43,6 +47,7 @@ export interface PulseComputed {
   reason: PulseReason;
   hoursSinceInbound: number | null;
   seen: boolean; // Slack read cursor says Felipe opened the thread after the last inbound
+  urgent: boolean; // real-fire signal: classifier says high OR pile-on count
 }
 
 const HOUR_MS = 3_600_000;
@@ -73,12 +78,17 @@ export function computeStatus(c: AmConversationRow, now: Date = new Date()): Pul
   const hoursSinceInbound = c.last_inbound_at ? hoursSince(c.last_inbound_at, now) : null;
   const lastReadAt = typeof c.meta?.last_read_at === "string" ? c.meta.last_read_at : null;
   const seen = !!(lastReadAt && c.last_inbound_at && after(lastReadAt, c.last_inbound_at));
+  // A REAL fire signal (Felipe: "fires actually need to be fires"): the
+  // classifier flagged a genuine problem (something wrong / money / frustration
+  // / name-pings), OR the client has piled on 3+ messages with no reply.
+  const pileOn = (c.unanswered_count ?? 0) >= PILE_ON_COUNT;
+  const urgent = c.ai_urgency === "high" || pileOn;
 
-  if (c.muted) return { status: "hidden", reason: "muted", hoursSinceInbound, seen };
+  if (c.muted) return { status: "hidden", reason: "muted", hoursSinceInbound, seen, urgent };
   if (c.snoozed_until && new Date(c.snoozed_until) > now) {
-    return { status: "hidden", reason: "snoozed", hoursSinceInbound, seen };
+    return { status: "hidden", reason: "snoozed", hoursSinceInbound, seen, urgent };
   }
-  if (!c.tracked) return { status: "hidden", reason: "untracked", hoursSinceInbound, seen };
+  if (!c.tracked) return { status: "hidden", reason: "untracked", hoursSinceInbound, seen, urgent };
 
   // "Handled" is a touch: it suppresses fires until the NEXT message arrives.
   const handledSinceLastMsg = after(c.handled_at, c.last_msg_at ?? undefined) && !!c.handled_at;
@@ -92,25 +102,30 @@ export function computeStatus(c: AmConversationRow, now: Date = new Date()): Pul
     !handledSinceLastMsg &&
     c.ai_needs_reply !== false
   ) {
-    const redAt = seen ? OWE_RED_HOURS_SEEN : OWE_RED_HOURS;
-    if (hoursSinceInbound >= redAt) {
+    // Red is EARNED, not aged into: urgent issues go red after 1h; ordinary
+    // unanswered messages red at 24h (12h if seen); low-stakes chatter is
+    // CAPPED at amber — it can never be a fire (unless it piles on).
+    const redAt = urgent ? OWE_RED_HOURS_URGENT : seen ? OWE_RED_HOURS_SEEN : OWE_RED_HOURS;
+    const cappedAtAmber = c.ai_urgency === "low" && !pileOn;
+    if (hoursSinceInbound >= redAt && !cappedAtAmber) {
       return {
         status: inQuietHoursET(now) ? "amber" : "red",
         reason: "owe_reply",
         hoursSinceInbound,
         seen,
+        urgent,
       };
     }
-    if (hoursSinceInbound >= OWE_AMBER_HOURS) {
-      return { status: "amber", reason: "owe_reply", hoursSinceInbound, seen };
+    if (hoursSinceInbound >= OWE_AMBER_HOURS || urgent) {
+      return { status: "amber", reason: "owe_reply", hoursSinceInbound, seen, urgent };
     }
-    return { status: "green", reason: "fresh_inbound", hoursSinceInbound, seen };
+    return { status: "green", reason: "fresh_inbound", hoursSinceInbound, seen, urgent };
   }
 
   // The sneak case: Felipe replied last, but the classifier says the ball is
   // still with him ("will do!" → undelivered promise).
   if (c.last_direction === "out" && c.ai_waiting_on === "you" && !handledSinceLastMsg) {
-    return { status: "amber", reason: "commitment", hoursSinceInbound, seen };
+    return { status: "amber", reason: "commitment", hoursSinceInbound, seen, urgent };
   }
 
   // Nudge: Felipe asked / spoke last and the client has gone quiet.
@@ -120,7 +135,7 @@ export function computeStatus(c: AmConversationRow, now: Date = new Date()): Pul
     !handledSinceLastMsg &&
     hoursSince(c.last_msg_at, now) >= NUDGE_DAYS * 24
   ) {
-    return { status: "amber", reason: "nudge", hoursSinceInbound, seen };
+    return { status: "amber", reason: "nudge", hoursSinceInbound, seen, urgent };
   }
 
   // Check-in: nothing either direction in checkin_days. Marking handled counts
@@ -128,8 +143,8 @@ export function computeStatus(c: AmConversationRow, now: Date = new Date()): Pul
   const lastTouch =
     c.handled_at && after(c.handled_at, c.last_msg_at ?? undefined) ? c.handled_at : c.last_msg_at;
   if (lastTouch && hoursSince(lastTouch, now) >= c.checkin_days * 24) {
-    return { status: "amber", reason: "checkin", hoursSinceInbound, seen };
+    return { status: "amber", reason: "checkin", hoursSinceInbound, seen, urgent };
   }
 
-  return { status: "green", reason: "ok", hoursSinceInbound, seen };
+  return { status: "green", reason: "ok", hoursSinceInbound, seen, urgent };
 }

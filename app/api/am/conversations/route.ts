@@ -17,7 +17,7 @@ const CONVO_COLUMNS =
   "id, channel, external_id, display_name, client_name, tracked, muted, snoozed_until, " +
   "checkin_days, client_notes, last_msg_at, last_direction, last_msg_preview, " +
   "last_inbound_at, last_outbound_at, handled_at, ai_needs_reply, ai_waiting_on, " +
-  "ai_open_commitment, ai_summary, ai_suggested_reply, meta, created_at";
+  "ai_urgency, unanswered_count, ai_open_commitment, ai_summary, ai_suggested_reply, meta, created_at";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildLink(c: any): string | null {
