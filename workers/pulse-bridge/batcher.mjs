@@ -37,7 +37,12 @@ export function createBatcher({ url, secret }) {
       });
       if (!res.ok) throw new Error(`POST /api/pulse/events → ${res.status}`);
       messages.splice(0, msgBatch.length);
-      heartbeats.clear();
+      // Delete only what THIS flush sent — a beat enqueued while the POST was
+      // in flight must survive to the next flush (clear() here silently ate
+      // every WhatsApp heartbeat that landed mid-flight).
+      for (const b of hbBatch) {
+        if (heartbeats.get(b.channel) === b.detail) heartbeats.delete(b.channel);
+      }
       for (const u of cuBatch) convoUpdates.delete(`${u.channel}|${u.externalConvoId}`);
       const { ingested = 0, duplicates = 0 } = await res.json().catch(() => ({}));
       if (msgBatch.length > 0) {
