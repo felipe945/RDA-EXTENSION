@@ -8,7 +8,7 @@ import { type NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { supabaseServer } from "@/lib/supabase";
-import { canManageTeam } from "@/lib/permissions";
+import { canViewPulse } from "@/lib/permissions";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -27,7 +27,7 @@ const patchSchema = z.object({
 export async function GET(_req: NextRequest, { params }: Ctx) {
   const { id } = await params;
   const session = await getServerSession(authOptions);
-  if (!session?.orgId || !canManageTeam(session.role)) {
+  if (!session?.orgId || !canViewPulse(session.role)) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -53,7 +53,7 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
 export async function PATCH(req: NextRequest, { params }: Ctx) {
   const { id } = await params;
   const session = await getServerSession(authOptions);
-  if (!session?.orgId || !canManageTeam(session.role)) {
+  if (!session?.orgId || !canViewPulse(session.role)) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 

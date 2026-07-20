@@ -90,11 +90,11 @@ export async function startWhatsApp(batcher) {
       }
     });
 
-    sock.ev.on("messages.upsert", ({ messages, type }) => {
+    sock.ev.on("messages.upsert", async ({ messages, type }) => {
       if (type !== "notify" && type !== "append") return;
       for (const m of messages) {
         try {
-          handleMessage(m);
+          await handleMessage(sock, m);
         } catch (e) {
           console.error("[wa] message handling failed", e);
         }
@@ -102,10 +102,26 @@ export async function startWhatsApp(batcher) {
     });
   }
 
-  function handleMessage(m) {
+  // Group subject lookup (groupMetadata is a read-only QUERY — nothing sent).
+  const groupNames = new Map();
+  async function groupName(sock, jid) {
+    if (groupNames.has(jid)) return groupNames.get(jid);
+    let name;
+    try {
+      name = (await sock.groupMetadata(jid))?.subject;
+    } catch {
+      name = undefined; // cache the miss — don't retry-storm on every message
+    }
+    groupNames.set(jid, name);
+    return name;
+  }
+
+  async function handleMessage(sock, m) {
     const jid = m.key?.remoteJid;
-    // 1:1 chats only — skip groups (@g.us), status broadcast, newsletters.
-    if (!jid || !jid.endsWith("@s.whatsapp.net")) return;
+    // 1:1 chats AND group chats (client relationships often live in groups).
+    // Still skipped: status broadcast, newsletters, everything else.
+    const isGroup = !!jid?.endsWith("@g.us");
+    if (!jid || (!jid.endsWith("@s.whatsapp.net") && !isGroup)) return;
     if (!m.key.id || !m.message) return;
     const body = extractText(m.message);
     if (body == null) return;
@@ -122,8 +138,12 @@ export async function startWhatsApp(batcher) {
       author: m.key.fromMe ? undefined : (m.pushName ?? undefined),
       body,
       sentAt: new Date(ts * 1000).toISOString(),
-      displayName: m.key.fromMe ? undefined : (m.pushName ?? undefined),
-      meta: { phone: jid.split("@")[0] },
+      displayName: isGroup
+        ? await groupName(sock, jid)
+        : m.key.fromMe
+          ? undefined
+          : (m.pushName ?? undefined),
+      meta: isGroup ? { group: true } : { phone: jid.split("@")[0] },
     });
   }
 

@@ -1,6 +1,6 @@
-// GET /api/am/conversations — Felipe-only (owner/admin) Pulse board data.
+// GET /api/am/conversations — OWNER-only (Felipe's private Pulse board).
 // NOT in proxy.ts OPEN_API_PREFIXES: the wall enforces a session, this handler
-// enforces admin. Reps get 401 here even with a valid session.
+// enforces owner. Admins AND reps get 401 even with a valid session.
 //   ?view=board     → tracked conversations w/ computed status + deep links + sources
 //   ?view=untracked → new threads awaiting Track/Ignore triage
 //   ?view=counts    → cheap counts for the nav badge
@@ -8,7 +8,7 @@ import { type NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { supabaseServer } from "@/lib/supabase";
-import { canManageTeam } from "@/lib/permissions";
+import { canViewPulse } from "@/lib/permissions";
 import { computeStatus, type AmConversationRow } from "@/lib/am/status";
 
 const STALE_HEARTBEAT_MS = 10 * 60_000;
@@ -22,6 +22,7 @@ const CONVO_COLUMNS =
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildLink(c: any): string | null {
   if (c.channel === "whatsapp") {
+    if (String(c.external_id).endsWith("@g.us")) return null; // groups have no wa.me deep link
     const phone = String(c.external_id).split("@")[0].replace(/\D/g, "");
     return phone ? `https://wa.me/${phone}` : null;
   }
@@ -35,7 +36,7 @@ const STATUS_ORDER = { red: 0, amber: 1, green: 2 } as const;
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.orgId || !canManageTeam(session.role)) {
+  if (!session?.orgId || !canViewPulse(session.role)) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 

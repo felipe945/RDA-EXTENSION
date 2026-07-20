@@ -3,7 +3,7 @@
 // no sends). Polls like the rest of the app (no Realtime, Option B).
 import { useCallback, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
-import { canManageTeam } from "@/lib/permissions";
+import { canViewPulse } from "@/lib/permissions";
 import { useToast } from "@/components/ui/toast";
 import { Flame, CircleAlert, Inbox, CheckCircle2 } from "lucide-react";
 import { PulseCard, type PulseConvo, channelGlyph } from "@/components/pulse/PulseCard";
@@ -73,7 +73,7 @@ export function PulseBoard() {
   );
 
   // Cosmetic gate — the API already 401s non-admins.
-  if (!canManageTeam(session?.role)) return null;
+  if (!canViewPulse(session?.role)) return null;
 
   const convos = board?.conversations ?? [];
   const fires = convos.filter((c) => c.status === "red");

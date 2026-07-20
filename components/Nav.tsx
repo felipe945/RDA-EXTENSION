@@ -5,13 +5,14 @@ import { usePathname } from "next/navigation";
 import { useMode } from "@/components/ModeProvider";
 import { useSession, signIn, signOut } from "next-auth/react";
 import { useEffect, useState } from "react";
-import { canManageTeam } from "@/lib/permissions";
+import { canViewPulse } from "@/lib/permissions";
 import { LayoutGrid, Send, BookOpen, Users, Puzzle, Radar } from "lucide-react";
 
 // /inbox stays routable but is hidden from the nav until reply detection
 // produces real messages — an always-empty inbox erodes trust in the rest.
-// Accounts (Pulse) is the nav's first role-gated item: admin/owner only —
-// the hide here is cosmetic, the real guard is /api/am/* 401ing non-admins.
+// Accounts (Pulse) is the nav's first role-gated item: OWNER only (Felipe's
+// private watchdog — admins must not see it either). The hide here is
+// cosmetic; the real guard is /api/am/* 401ing everyone but the owner.
 const NAV_LINKS = [
   { href: "/",                   label: "Dashboard", icon: LayoutGrid },
   { href: "/outreach",           label: "Outreach",  icon: Send },
@@ -27,7 +28,7 @@ export default function Nav() {
   const pathname = usePathname();
   const { mode } = useMode();
   const { data: session } = useSession();
-  const isAdmin = canManageTeam(session?.role);
+  const isAdmin = canViewPulse(session?.role);
   const [counts, setCounts] = useState<NotifCounts>({ overdue: 0, replied: 0, unread: 0, pulseRed: 0 });
 
   useEffect(() => {
