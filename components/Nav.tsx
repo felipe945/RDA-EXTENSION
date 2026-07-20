@@ -5,25 +5,30 @@ import { usePathname } from "next/navigation";
 import { useMode } from "@/components/ModeProvider";
 import { useSession, signIn, signOut } from "next-auth/react";
 import { useEffect, useState } from "react";
-import { LayoutGrid, Send, BookOpen, Users, Puzzle } from "lucide-react";
+import { canManageTeam } from "@/lib/permissions";
+import { LayoutGrid, Send, BookOpen, Users, Puzzle, Radar } from "lucide-react";
 
 // /inbox stays routable but is hidden from the nav until reply detection
 // produces real messages — an always-empty inbox erodes trust in the rest.
+// Accounts (Pulse) is the nav's first role-gated item: admin/owner only —
+// the hide here is cosmetic, the real guard is /api/am/* 401ing non-admins.
 const NAV_LINKS = [
   { href: "/",                   label: "Dashboard", icon: LayoutGrid },
   { href: "/outreach",           label: "Outreach",  icon: Send },
   { href: "/scripts",            label: "Scripts",   icon: BookOpen },
+  { href: "/accounts",           label: "Accounts",  icon: Radar, adminOnly: true },
   { href: "/settings/team",      label: "Team",      icon: Users },
   { href: "/settings/extension", label: "Extension", icon: Puzzle },
 ];
 
-type NotifCounts = { overdue: number; replied: number; unread: number };
+type NotifCounts = { overdue: number; replied: number; unread: number; pulseRed: number };
 
 export default function Nav() {
   const pathname = usePathname();
   const { mode } = useMode();
   const { data: session } = useSession();
-  const [counts, setCounts] = useState<NotifCounts>({ overdue: 0, replied: 0, unread: 0 });
+  const isAdmin = canManageTeam(session?.role);
+  const [counts, setCounts] = useState<NotifCounts>({ overdue: 0, replied: 0, unread: 0, pulseRed: 0 });
 
   useEffect(() => {
     async function loadCounts() {
@@ -37,14 +42,23 @@ export default function Nav() {
         const notifs = notifications as { type?: string }[];
         const unread = notifs.filter(n => n.type?.endsWith("_reply") || n.type === "replied").length;
         const replied = notifs.filter(n => n.type === "replied" || n.type === "ig_reply").length;
-        setCounts({ overdue: (overdue as unknown[]).length, replied, unread });
+
+        // Pulse fires badge — admin-only endpoint; piggybacks this same tick.
+        let pulseRed = 0;
+        if (isAdmin) {
+          try {
+            const pulse = await fetch("/api/am/conversations?view=counts");
+            if (pulse.ok) pulseRed = (await pulse.json())?.counts?.red ?? 0;
+          } catch {}
+        }
+        setCounts({ overdue: (overdue as unknown[]).length, replied, unread, pulseRed });
       } catch {}
     }
 
     loadCounts();
     const interval = setInterval(loadCounts, 60_000);
     return () => clearInterval(interval);
-  }, [mode]);
+  }, [mode, isAdmin]);
 
   const urgentCount = counts.overdue + counts.replied;
 
@@ -62,12 +76,16 @@ export default function Nav() {
 
       {/* Nav links */}
       <nav className="flex-1 px-3 pt-3 space-y-0.5">
-        {NAV_LINKS.map(({ href, label, icon: Icon }) => {
+        {NAV_LINKS.filter(l => !l.adminOnly || isAdmin).map(({ href, label, icon: Icon }) => {
           const isActive = pathname === href || (href !== "/" && pathname.startsWith(href));
-          const badge = href === "/" && urgentCount > 0 ? urgentCount : null;
+          const badge = href === "/" && urgentCount > 0 ? urgentCount
+            : href === "/accounts" && counts.pulseRed > 0 ? counts.pulseRed
+            : null;
           return (
             <Link key={href} href={href}
-              title={badge !== null ? `${counts.overdue} overdue + ${counts.replied} replied` : undefined}
+              title={badge !== null && href === "/" ? `${counts.overdue} overdue + ${counts.replied} replied`
+                : badge !== null ? `${counts.pulseRed} client fire${counts.pulseRed === 1 ? "" : "s"}`
+                : undefined}
               className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors relative"
               style={isActive
                 ? { background: 'rgba(59,130,246,0.12)', color: '#60A5FA' }

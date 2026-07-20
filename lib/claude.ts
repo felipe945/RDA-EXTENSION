@@ -28,10 +28,12 @@ export async function askStructured<T>(
   toolName: string,
   toolSchema: Anthropic.Tool["input_schema"],
   maxTokens = 2048,
+  temperature?: number,
 ): Promise<T> {
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: maxTokens,
+    ...(temperature != null ? { temperature } : {}),
     system: systemPrompt,
     messages: [{ role: "user", content: userMessage }],
     tools: [{ name: toolName, description: "Return structured research data", input_schema: toolSchema }],

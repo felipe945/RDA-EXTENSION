@@ -33,6 +33,13 @@
 //                            (the extension has no cookie). assign-next adds a
 //                            role gate (admin/owner) on top of getActor;
 //                            bulk-import does its own getServerSession check.
+//   - /api/pulse/*           pulse-bridge worker (Felipe's Mac) — authenticates
+//                            via Bearer PULSE_BRIDGE_SECRET (fail-closed)
+//   - /api/am/internal/*     Pulse internal hops (classify) — CRON_SECRET via
+//                            hasInternalSecret. NOTE: /api/am/conversations is
+//                            deliberately NOT open (prefix match is exact-or-
+//                            "prefix/") — it stays behind the session wall and
+//                            adds a canManageTeam gate in the handler.
 // These each authenticate themselves internally, so bypassing the session check
 // here does not expose data.
 import { getToken } from "next-auth/jwt";
@@ -54,6 +61,8 @@ const OPEN_API_PREFIXES = [
   "/api/invites/preview",
   "/api/extension",
   "/api/calendar",
+  "/api/pulse",
+  "/api/am/internal",
 ];
 
 function isOpenApi(pathname: string): boolean {
@@ -87,6 +96,7 @@ export const config = {
     "/outreach/:path*",
     "/scripts/:path*",
     "/settings/:path*",
+    "/accounts/:path*",
     "/api/:path*",
   ],
 };

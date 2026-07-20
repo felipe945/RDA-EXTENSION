@@ -47,3 +47,8 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 dist/
+
+# pulse-bridge worker (Felipe's Mac only — WA session keys + poll cursors)
+workers/pulse-bridge/auth/
+workers/pulse-bridge/state.json
+workers/pulse-bridge/node_modules/
