@@ -9,6 +9,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { supabaseServer } from "@/lib/supabase";
 import { canViewPulse } from "@/lib/permissions";
+import { fireClassify } from "@/lib/am/ingest";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -90,6 +91,10 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     .maybeSingle();
   if (error) return Response.json({ error: error.message }, { status: 500 });
   if (!data) return Response.json({ error: "not found" }, { status: 404 });
+
+  // Newly tracked client → the AI reads the thread immediately (don't wait
+  // for their next message to know where things stand).
+  if (p.tracked === true) fireClassify(id);
 
   return Response.json({ ok: true });
 }
