@@ -53,8 +53,24 @@ export async function startWhatsApp(batcher) {
     const sock = makeWASocket({ version, auth: state, syncFullHistory: false });
     sock.ev.on("creds.update", saveCreds);
 
-    sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
-      if (qr) {
+    // WA_PAIR_NUMBER set → code-based linking ("Link with phone number
+    // instead") — codes outlive the ~60s QR rotation, so no scan race.
+    const pairNumber = (process.env.WA_PAIR_NUMBER ?? "").replace(/\D/g, "");
+    let pairingRequested = false;
+
+    sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
+      if (qr && pairNumber && !state.creds.registered) {
+        if (!pairingRequested) {
+          pairingRequested = true;
+          try {
+            const code = await sock.requestPairingCode(pairNumber);
+            const pretty = code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code;
+            console.log(`\n[wa] PAIRING CODE: ${pretty}\n[wa] Phone → WhatsApp → Linked Devices → Link a Device → "Link with phone number instead" → enter the code.\n`);
+          } catch (e) {
+            console.error("[wa] pairing code request failed:", e?.message ?? e);
+          }
+        }
+      } else if (qr) {
         console.log("\n[wa] Scan this QR with WhatsApp → Settings → Linked Devices:\n");
         qrcode.generate(qr, { small: true });
       }
