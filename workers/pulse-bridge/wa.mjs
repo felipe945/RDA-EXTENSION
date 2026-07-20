@@ -5,7 +5,11 @@
 // after the worker was down) — the server dedupes on external ids.
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import makeWASocket, { useMultiFileAuthState, DisconnectReason } from "baileys";
+import makeWASocket, {
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+} from "baileys";
 import qrcode from "qrcode-terminal";
 
 const AUTH_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "auth");
@@ -42,8 +46,11 @@ export async function startWhatsApp(batcher) {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   let connected = false;
 
-  function connect() {
-    const sock = makeWASocket({ auth: state, syncFullHistory: false });
+  async function connect() {
+    // Announce the CURRENT WhatsApp-Web version — a stale hardcoded one gets
+    // rejected with 405 at registration (the classic Baileys gotcha).
+    const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
+    const sock = makeWASocket({ version, auth: state, syncFullHistory: false });
     sock.ev.on("creds.update", saveCreds);
 
     sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
@@ -63,7 +70,7 @@ export async function startWhatsApp(batcher) {
           return; // don't reconnect a dead session
         }
         console.log(`[wa] connection closed (${code ?? "?"}) — reconnecting in ${RECONNECT_MS / 1000}s`);
-        setTimeout(connect, RECONNECT_MS);
+        setTimeout(() => connect().catch((e) => console.error("[wa] reconnect failed", e)), RECONNECT_MS);
       }
     });
 
@@ -104,7 +111,7 @@ export async function startWhatsApp(batcher) {
     });
   }
 
-  connect();
+  connect().catch((e) => console.error("[wa] initial connect failed", e));
   setInterval(() => batcher.enqueueHeartbeat("whatsapp", { wa_connected: connected }), 60_000);
   batcher.enqueueHeartbeat("whatsapp", { wa_connected: false, booting: true });
 }
