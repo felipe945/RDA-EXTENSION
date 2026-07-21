@@ -53,6 +53,7 @@ Rules:
 - urgency rubric — "high" is reserved for REAL FIRES, not ordinary questions: something is wrong or broken (payments, payouts, access, errors, "this isn't working"), money is at risk (refunds, chargebacks, missing funds), the client is visibly frustrated or escalating, they mention Felipe by name asking for a response ("Felipe?", "@felipe any update"), they've sent repeated unanswered follow-ups on the same issue, or they hint at leaving. "medium" = a direct question or request that deserves a same-day answer. "low" = chatter, FYIs, pleasantries, congratulations, anything with no real ask. Do NOT inflate: an ordinary question is medium, never high.
 - waiting_on="you" whenever Felipe made a promise or commitment that is not yet visibly delivered in the thread ("will do", "I'll send it tomorrow", "let me check with the team") — even if his message is the most recent one. Quote the promise in open_commitment.
 - waiting_on="them" when Felipe asked something and the client hasn't answered.
+- The transcript labels each message (our team) or (client). TEAMMATES' ANSWERS COUNT: if a colleague already resolved the client's ask, needs_reply=false — Felipe doesn't owe a duplicate reply. He only owes something if the issue remains unresolved, the client re-raised it after the teammate's answer, the client asked for HIM specifically, or he personally committed to something.
 - Judge from the CLIENT CONTEXT notes when present — they tell you what's in flight and what "done" looks like.
 - summary: plain, concrete, ≤120 characters. No fluff.
 - suggested_reply is copy-paste material ONLY (nothing sends it). Felipe's voice: casual professional, warm but direct, 1-3 sentences, no em dashes, no corporate filler.`;
@@ -71,7 +72,10 @@ export interface PulseClassifyInput {
 
 export function buildPulseClassifyPrompt(input: PulseClassifyInput): string {
   const lines = input.messages.map((m) => {
-    const who = m.direction === "out" ? "FELIPE" : (m.author ?? "CLIENT");
+    const who =
+      m.direction === "out"
+        ? `${m.author ?? "FELIPE"} (our team)`
+        : `${m.author ?? "CLIENT"} (client)`;
     const ago =
       m.agoHours < 1
         ? "just now"

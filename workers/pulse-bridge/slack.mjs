@@ -39,6 +39,7 @@ export async function startSlack(batcher) {
   const state = loadState();
   let lastChannelCount = 0;
   let healthy = false;
+  let ME, TEAM; // set at boot by auth.test
 
   async function api(method, params = {}) {
     await sleep(CALL_GAP_MS);
@@ -59,16 +60,28 @@ export async function startSlack(batcher) {
     return data;
   }
 
-  async function userName(userId) {
-    if (!userId) return undefined;
-    if (state.users[userId]) return state.users[userId];
+  // Resolve author name + SIDE. FanBasis teammates (full members of our
+  // workspace) count as OUR side — a colleague answering the client answers
+  // for Felipe. Clients = Slack Connect externals (different team_id) or
+  // single/multi-channel guests (is_restricted flags).
+  async function userInfo(userId) {
+    if (!userId) return { name: undefined, isTeam: false };
+    const cached = state.users[userId];
+    if (cached && typeof cached === "object") return cached;
     try {
       const { user } = await api("users.info", { user: userId });
-      const name = user?.profile?.display_name || user?.real_name || user?.name || userId;
-      state.users[userId] = name;
-      return name;
+      const info = {
+        name: user?.profile?.display_name || user?.real_name || user?.name || userId,
+        isTeam:
+          user?.team_id === TEAM &&
+          !user?.is_restricted &&
+          !user?.is_ultra_restricted &&
+          !user?.is_bot,
+      };
+      state.users[userId] = info; // replaces legacy string cache entries too
+      return info;
     } catch {
-      return userId;
+      return { name: typeof cached === "string" ? cached : userId, isTeam: false };
     }
   }
 
@@ -88,28 +101,31 @@ export async function startSlack(batcher) {
     return channels;
   }
 
-  function mapMessage(m, channelId, displayName, meId, teamId, authorName) {
+  // direction = SIDE: "out" for anyone on our team (Felipe OR a colleague),
+  // "in" only for the client side. The engine's owe/fire logic keys off this.
+  function mapMessage(m, channelId, displayName, info) {
+    const isUs = m.user === ME || info.isTeam;
     return {
       channel: "slack",
       externalConvoId: channelId,
       externalMsgId: m.ts,
-      direction: m.user === meId ? "out" : "in",
-      author: m.user === meId ? undefined : authorName,
+      direction: isUs ? "out" : "in",
+      author: m.user === ME ? "Felipe" : info.name,
       body: m.text ?? "",
       sentAt: new Date(Number(m.ts) * 1000).toISOString(),
       displayName,
-      meta: { team_id: teamId },
+      meta: { team_id: TEAM },
     };
   }
 
-  async function sweep(meId, teamId) {
+  async function sweep() {
     const channels = await listChannels();
     lastChannelCount = channels.length;
 
     for (const ch of channels) {
       try {
         const displayName = ch.is_im
-          ? await userName(ch.user)
+          ? (await userInfo(ch.user)).name
           : ch.name
             ? `#${ch.name}`
             : ch.id;
@@ -137,10 +153,11 @@ export async function startSlack(batcher) {
               parentsWithNewReplies.push(m.ts);
             }
             if (m.subtype || m.bot_id || !m.ts) continue;
-            const author = m.user === meId ? undefined : await userName(m.user);
-            batcher.enqueueMessage(mapMessage(m, ch.id, displayName, meId, teamId, author));
+            const info = m.user === ME ? { name: "Felipe", isTeam: true } : await userInfo(m.user);
+            const mapped = mapMessage(m, ch.id, displayName, info);
+            batcher.enqueueMessage(mapped);
             if (!state.lastDir[ch.id] || Number(m.ts) >= maxTs) {
-              state.lastDir[ch.id] = m.user === meId ? "out" : "in";
+              state.lastDir[ch.id] = mapped.direction;
             }
           }
           if (hasMore && msgs.length > 0) oldest = msgs[msgs.length - 1].ts;
@@ -158,9 +175,10 @@ export async function startSlack(batcher) {
             if (m.subtype && m.subtype !== "thread_broadcast") continue;
             if (m.bot_id || !m.ts) continue;
             if (Number(m.ts) > maxTs) maxTs = Number(m.ts);
-            const author = m.user === meId ? undefined : await userName(m.user);
-            batcher.enqueueMessage(mapMessage(m, ch.id, displayName, meId, teamId, author));
-            state.lastDir[ch.id] = m.user === meId ? "out" : "in";
+            const info = m.user === ME ? { name: "Felipe", isTeam: true } : await userInfo(m.user);
+            const mapped = mapMessage(m, ch.id, displayName, info);
+            batcher.enqueueMessage(mapped);
+            state.lastDir[ch.id] = mapped.direction;
           }
         }
 
@@ -188,13 +206,12 @@ export async function startSlack(batcher) {
   }
 
   // Boot: identify Felipe + the workspace, then sweep forever.
-  let meId, teamId;
   try {
     const auth = await api("auth.test");
-    meId = auth.user_id;
-    teamId = auth.team_id;
+    ME = auth.user_id;
+    TEAM = auth.team_id;
     healthy = true;
-    console.log(`[slack] polling as ${auth.user} (${meId}) in team ${teamId}`);
+    console.log(`[slack] polling as ${auth.user} (${ME}) in team ${TEAM}`);
   } catch (e) {
     console.error("[slack] auth.test failed — check SLACK_USER_TOKEN:", e.message ?? e);
     return;
@@ -209,7 +226,7 @@ export async function startSlack(batcher) {
   while (true) {
     const started = Date.now();
     try {
-      await sweep(meId, teamId);
+      await sweep();
       healthy = true;
     } catch (e) {
       healthy = false;

@@ -189,7 +189,7 @@ export function PulseCard({
 
       {c.last_msg_preview && (
         <p className="mt-1.5 truncate text-xs text-[#94A3B8]">
-          <span className="text-[#5B6B8C]">{c.last_direction === "out" ? "you: " : ""}</span>
+          <span className="text-[#5B6B8C]">{c.last_direction === "out" ? "us: " : ""}</span>
           {c.last_msg_preview}
         </p>
       )}
@@ -248,7 +248,7 @@ export function PulseCard({
                   className="font-semibold"
                   style={{ color: m.direction === "out" ? "#60A5FA" : "#94A3B8" }}
                 >
-                  {m.direction === "out" ? "you" : (m.author ?? "them")}:
+                  {m.author ?? (m.direction === "out" ? "us" : "them")}:
                 </span>{" "}
                 <span className="text-[#94A3B8]">{m.body ?? "[no text]"}</span>
               </p>
