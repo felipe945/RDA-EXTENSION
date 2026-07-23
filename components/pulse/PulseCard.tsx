@@ -168,9 +168,11 @@ export function PulseCard({
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {c.link && (
+            // Named target: every Open click reuses ONE companion tab
+            // ("pulse-thread") instead of stacking a new tab per click.
             <a
               href={c.link}
-              target="_blank"
+              target="pulse-thread"
               rel="noreferrer"
               className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-white transition-opacity hover:opacity-85"
               style={{ background: "#FF3A69" }}
